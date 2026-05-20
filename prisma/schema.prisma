@@ -9,7 +9,7 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  schemas  = ["iam", "crm", "research", "market", "governance", "ai"]
+  schemas  = ["iam", "crm", "research", "market", "governance", "ai", "wallet"]
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -17,13 +17,13 @@ datasource db {
 // ═══════════════════════════════════════════════════════════
 
 model User {
-  id          String           @id @default(uuid()) @db.Uuid
-  email       String           @unique
+  id          String          @id @default(uuid()) @db.Uuid
+  email       String          @unique
   name        String?
-  status      String           @default("active")
-  locale      String           @default("pt-BR")
-  createdAt   DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt   DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+  status      String          @default("active")
+  locale      String          @default("pt-BR")
+  createdAt   DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
   preferences UserPreference?
   consents    UserConsent[]
 
@@ -48,19 +48,19 @@ model UserPreference {
 }
 
 model UserConsent {
-  id             String    @id @default(uuid()) @db.Uuid
-  userId         String?   @map("user_id") @db.Uuid
-  user           User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
-  email          String?
-  consentType    String    @map("consent_type")
-  granted        Boolean
-  grantedAt      DateTime  @default(now()) @map("granted_at") @db.Timestamptz(6)
-  revokedAt      DateTime? @map("revoked_at") @db.Timestamptz(6)
-  policyVersion  String    @map("policy_version")
-  source         String
-  locale         String    @default("pt-BR")
-  ipHash         String?   @map("ip_hash")
-  userAgentHash  String?   @map("user_agent_hash")
+  id            String    @id @default(uuid()) @db.Uuid
+  userId        String?   @map("user_id") @db.Uuid
+  user          User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  email         String?
+  consentType   String    @map("consent_type")
+  granted       Boolean
+  grantedAt     DateTime  @default(now()) @map("granted_at") @db.Timestamptz(6)
+  revokedAt     DateTime? @map("revoked_at") @db.Timestamptz(6)
+  policyVersion String    @map("policy_version")
+  source        String
+  locale        String    @default("pt-BR")
+  ipHash        String?   @map("ip_hash")
+  userAgentHash String?   @map("user_agent_hash")
 
   @@index([email])
   @@index([consentType])
@@ -111,16 +111,16 @@ model ContactEvent {
 }
 
 model VisitorState {
-  id                 String    @id @default(uuid()) @db.Uuid
-  visitorId          String    @unique @map("visitor_id")
-  qualifiedSessions  Int       @default(0) @map("qualified_sessions")
-  popupDismissals    Int       @default(0) @map("popup_dismissals")
-  subscribed         Boolean   @default(false)
-  subscribedAt       DateTime? @map("subscribed_at") @db.Timestamptz(6)
-  leadId             String?   @map("lead_id") @db.Uuid
-  lastSessionAt      DateTime? @map("last_session_at") @db.Timestamptz(6)
-  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt          DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  id                String    @id @default(uuid()) @db.Uuid
+  visitorId         String    @unique @map("visitor_id")
+  qualifiedSessions Int       @default(0) @map("qualified_sessions")
+  popupDismissals   Int       @default(0) @map("popup_dismissals")
+  subscribed        Boolean   @default(false)
+  subscribedAt      DateTime? @map("subscribed_at") @db.Timestamptz(6)
+  leadId            String?   @map("lead_id") @db.Uuid
+  lastSessionAt     DateTime? @map("last_session_at") @db.Timestamptz(6)
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   @@index([subscribed])
   @@index([createdAt])
@@ -168,19 +168,19 @@ model ResearchRun {
 }
 
 model ResearchFinding {
-  id                String       @id @default(uuid()) @db.Uuid
-  researchRunId     String       @map("research_run_id") @db.Uuid
-  researchRun       ResearchRun  @relation(fields: [researchRunId], references: [id], onDelete: Cascade)
-  sourceId          String?      @map("source_id") @db.Uuid
-  source            Source?      @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  id                String      @id @default(uuid()) @db.Uuid
+  researchRunId     String      @map("research_run_id") @db.Uuid
+  researchRun       ResearchRun @relation(fields: [researchRunId], references: [id], onDelete: Cascade)
+  sourceId          String?     @map("source_id") @db.Uuid
+  source            Source?     @relation(fields: [sourceId], references: [id], onDelete: SetNull)
   title             String
-  rawPayload        Json         @map("raw_payload")
-  normalizedPayload Json         @map("normalized_payload")
+  rawPayload        Json        @map("raw_payload")
+  normalizedPayload Json        @map("normalized_payload")
   language          String
-  countryCode       String       @map("country_code")
-  eventDate         DateTime?    @map("event_date") @db.Timestamptz(6)
-  confidenceScore   Float?       @map("confidence_score")
-  createdAt         DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  countryCode       String      @map("country_code")
+  eventDate         DateTime?   @map("event_date") @db.Timestamptz(6)
+  confidenceScore   Float?      @map("confidence_score")
+  createdAt         DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
 
   @@index([researchRunId])
   @@index([countryCode])
@@ -211,15 +211,15 @@ model AnalysisReport {
 }
 
 model CrossSignalLink {
-  id              String   @id @default(uuid()) @db.Uuid
-  referenceTypeA  String   @map("reference_type_a")
-  referenceIdA    String   @map("reference_id_a")
-  referenceTypeB  String   @map("reference_type_b")
-  referenceIdB    String   @map("reference_id_b")
-  relationshipType String  @map("relationship_type")
-  strengthScore   Float    @map("strength_score")
-  notes           String?
-  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  id               String   @id @default(uuid()) @db.Uuid
+  referenceTypeA   String   @map("reference_type_a")
+  referenceIdA     String   @map("reference_id_a")
+  referenceTypeB   String   @map("reference_type_b")
+  referenceIdB     String   @map("reference_id_b")
+  relationshipType String   @map("relationship_type")
+  strengthScore    Float    @map("strength_score")
+  notes            String?
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
   @@index([referenceTypeA, referenceIdA])
   @@index([referenceTypeB, referenceIdB])
@@ -233,18 +233,18 @@ model CrossSignalLink {
 // ═══════════════════════════════════════════════════════════
 
 model MarketEvent {
-  id                 String   @id @default(uuid()) @db.Uuid
-  polymarketEventId  String   @unique @map("polymarket_event_id")
-  title              String
-  slug               String?
-  active             Boolean  @default(true)
-  closed             Boolean  @default(false)
-  eventStart         DateTime? @map("event_start") @db.Timestamptz(6)
-  eventEnd           DateTime? @map("event_end") @db.Timestamptz(6)
-  rawPayload         Json?    @map("raw_payload")
-  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt          DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
-  markets            Market[]
+  id                String    @id @default(uuid()) @db.Uuid
+  polymarketEventId String    @unique @map("polymarket_event_id")
+  title             String
+  slug              String?
+  active            Boolean   @default(true)
+  closed            Boolean   @default(false)
+  eventStart        DateTime? @map("event_start") @db.Timestamptz(6)
+  eventEnd          DateTime? @map("event_end") @db.Timestamptz(6)
+  rawPayload        Json?     @map("raw_payload")
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  markets           Market[]
 
   @@index([slug])
   @@index([active])
@@ -254,24 +254,24 @@ model MarketEvent {
 }
 
 model Market {
-  id                  String          @id @default(uuid()) @db.Uuid
-  polymarketMarketId  String          @unique @map("polymarket_market_id")
-  eventId             String?         @map("event_id") @db.Uuid
-  event               MarketEvent?    @relation(fields: [eventId], references: [id], onDelete: SetNull)
-  slug                String?
-  title               String
-  description         String?
-  active              Boolean         @default(true)
-  closed              Boolean         @default(false)
-  archived            Boolean?
-  category            String?
-  endDate             DateTime?       @map("end_date") @db.Timestamptz(6)
-  rawPayload          Json?           @map("raw_payload")
-  createdAt           DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt           DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
-  outcomes            MarketOutcome[]
-  prices              MarketPrice[]
-  forecastSnapshots   ForecastSnapshot[]
+  id                 String             @id @default(uuid()) @db.Uuid
+  polymarketMarketId String             @unique @map("polymarket_market_id")
+  eventId            String?            @map("event_id") @db.Uuid
+  event              MarketEvent?       @relation(fields: [eventId], references: [id], onDelete: SetNull)
+  slug               String?
+  title              String
+  description        String?
+  active             Boolean            @default(true)
+  closed             Boolean            @default(false)
+  archived           Boolean?
+  category           String?
+  endDate            DateTime?          @map("end_date") @db.Timestamptz(6)
+  rawPayload         Json?              @map("raw_payload")
+  createdAt          DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
+  outcomes           MarketOutcome[]
+  prices             MarketPrice[]
+  forecastSnapshots  ForecastSnapshot[]
 
   @@index([slug])
   @@index([active])
@@ -300,17 +300,17 @@ model MarketOutcome {
 }
 
 model MarketPrice {
-  id          String         @id @default(uuid()) @db.Uuid
-  marketId    String         @map("market_id") @db.Uuid
-  market      Market         @relation(fields: [marketId], references: [id], onDelete: Cascade)
-  outcomeId   String?        @map("outcome_id") @db.Uuid
-  outcome     MarketOutcome? @relation(fields: [outcomeId], references: [id], onDelete: SetNull)
-  price       Float
-  volume      Float?
-  liquidity   Float?
-  snapshotAt  DateTime       @map("snapshot_at") @db.Timestamptz(6)
-  sourceType  String         @default("cron") @map("source_type")
-  dedupHash   String         @unique @map("dedup_hash")
+  id         String         @id @default(uuid()) @db.Uuid
+  marketId   String         @map("market_id") @db.Uuid
+  market     Market         @relation(fields: [marketId], references: [id], onDelete: Cascade)
+  outcomeId  String?        @map("outcome_id") @db.Uuid
+  outcome    MarketOutcome? @relation(fields: [outcomeId], references: [id], onDelete: SetNull)
+  price      Float
+  volume     Float?
+  liquidity  Float?
+  snapshotAt DateTime       @map("snapshot_at") @db.Timestamptz(6)
+  sourceType String         @default("cron") @map("source_type")
+  dedupHash  String         @unique @map("dedup_hash")
 
   @@index([marketId, snapshotAt])
   @@index([outcomeId, snapshotAt])
@@ -419,4 +419,193 @@ model ModelOutput {
   @@index([createdAt])
   @@map("model_outputs")
   @@schema("ai")
+}
+
+// ═══════════════════════════════════════════════════════════
+// WALLET — Polymarket trader wallet intelligence & red flags
+// ═══════════════════════════════════════════════════════════
+
+model Wallet {
+  id                   String           @id @default(uuid()) @db.Uuid
+  proxyAddress         String           @unique @map("proxy_address")
+  proxyType            String           @default("unknown") @map("proxy_type")
+  eoaOwnerAddress      String?          @map("eoa_owner_address")
+  firstSeenAt          DateTime         @default(now()) @map("first_seen_at") @db.Timestamptz(6)
+  // ON-CHAIN first activity (earliest timestamp derived from /trades or /activity);
+  // distinct from `firstSeenAt`, which is when AFOS first OBSERVED the wallet
+  // (i.e. when our cron first ingested it). May be null for wallets we have
+  // not yet derived a chain age for; backfilled best-effort in ingest.
+  chainFirstActivityAt DateTime?        @map("chain_first_activity_at") @db.Timestamptz(6)
+  lastSeenAt           DateTime         @default(now()) @map("last_seen_at") @db.Timestamptz(6)
+  totalValueUsd        Float?           @map("total_value_usd")
+  active               Boolean          @default(true)
+  createdAt            DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+  profile              WalletProfile?
+  positions            WalletPosition[]
+  trades               WalletTrade[]
+  redFlags             RedFlag[]
+  score                WalletScore?
+
+  @@index([proxyAddress])
+  @@index([eoaOwnerAddress])
+  @@index([firstSeenAt])
+  @@index([chainFirstActivityAt])
+  @@index([active])
+  @@index([createdAt])
+  @@map("wallets")
+  @@schema("wallet")
+}
+
+model WalletProfile {
+  id              String   @id @default(uuid()) @db.Uuid
+  walletId        String   @unique @map("wallet_id") @db.Uuid
+  wallet          Wallet   @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  pseudonym       String?
+  username        String?
+  xUsername       String?  @map("x_username")
+  profileImageUrl String?  @map("profile_image_url")
+  verifiedBadge   Boolean  @default(false) @map("verified_badge")
+  lastFetchedAt   DateTime @default(now()) @map("last_fetched_at") @db.Timestamptz(6)
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("wallet_profiles")
+  @@schema("wallet")
+}
+
+model WalletPosition {
+  id                String   @id @default(uuid()) @db.Uuid
+  walletId          String   @map("wallet_id") @db.Uuid
+  wallet            Wallet   @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  marketConditionId String   @map("market_condition_id")
+  marketSlug        String   @map("market_slug")
+  outcomeIndex      Int      @map("outcome_index")
+  outcomeName       String   @map("outcome_name")
+  size              Float
+  avgPrice          Float    @map("avg_price")
+  currentValueUsd   Float    @map("current_value_usd")
+  pnlUsd            Float    @map("pnl_usd")
+  pnlPercent        Float?   @map("pnl_percent")
+  snapshotDate      DateTime @map("snapshot_date") @db.Date
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@unique([walletId, marketConditionId, outcomeIndex, snapshotDate])
+  @@index([walletId])
+  @@index([marketConditionId])
+  @@index([marketSlug])
+  @@index([snapshotDate])
+  @@map("wallet_positions")
+  @@schema("wallet")
+}
+
+model WalletTrade {
+  id                String   @id @default(uuid()) @db.Uuid
+  walletId          String   @map("wallet_id") @db.Uuid
+  wallet            Wallet   @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  marketConditionId String   @map("market_condition_id")
+  marketSlug        String   @map("market_slug")
+  side              String
+  assetTokenId      String   @map("asset_token_id")
+  outcomeIndex      Int?     @map("outcome_index")
+  size              Float
+  price             Float
+  valueUsd          Float    @map("value_usd")
+  transactionHash   String   @map("transaction_hash")
+  tradeTimestamp    DateTime @map("trade_timestamp") @db.Timestamptz(6)
+  dedupHash         String   @unique @map("dedup_hash")
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([walletId])
+  @@index([marketConditionId])
+  @@index([marketSlug])
+  @@index([transactionHash])
+  @@index([tradeTimestamp])
+  @@index([marketConditionId, tradeTimestamp])
+  @@index([walletId, tradeTimestamp])
+  @@map("wallet_trades")
+  @@schema("wallet")
+}
+
+model MarketHolderSnapshot {
+  id                String   @id @default(uuid()) @db.Uuid
+  marketConditionId String   @map("market_condition_id")
+  marketSlug        String   @map("market_slug")
+  snapshotAt        DateTime @map("snapshot_at") @db.Timestamptz(6)
+  holdersJson       Json     @map("holders_json")
+  totalHolders      Int      @map("total_holders")
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@unique([marketConditionId, snapshotAt])
+  @@index([marketConditionId])
+  @@index([snapshotAt])
+  @@map("market_holder_snapshots")
+  @@schema("wallet")
+}
+
+model FlagRule {
+  id          String   @id @default(uuid()) @db.Uuid
+  ruleKey     String   @unique @map("rule_key")
+  displayName String   @map("display_name")
+  description String
+  severity    String
+  enabled     Boolean  @default(true)
+  paramsJson  Json     @map("params_json")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([severity])
+  @@index([enabled])
+  @@map("flag_rules")
+  @@schema("wallet")
+}
+
+model RedFlag {
+  id                String   @id @default(uuid()) @db.Uuid
+  walletId          String   @map("wallet_id") @db.Uuid
+  wallet            Wallet   @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  ruleKey           String   @map("rule_key")
+  severity          String
+  marketConditionId String?  @map("market_condition_id")
+  evidenceJson      Json     @map("evidence_json")
+  // Stable hash of the evidence payload (computed by the detector). Used by the
+  // composite UNIQUE (walletId, ruleKey, marketConditionId, evidenceHash) below
+  // to deduplicate red flags across re-evaluations of the same underlying signal.
+  // NOTE: PostgreSQL treats NULLs as distinct in UNIQUE indexes, so rules where
+  // marketConditionId is NULL (non-per-market rules) can still produce multiple
+  // rows with the same (wallet, rule, evidenceHash). That is intentional — we
+  // do NOT coerce NULL → '' because doing so would change query semantics
+  // elsewhere (filtering by marketConditionId IS NULL would no longer match).
+  evidenceHash      String   @map("evidence_hash")
+  explanation       String
+  triggeredAt       DateTime @default(now()) @map("triggered_at") @db.Timestamptz(6)
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@unique([walletId, ruleKey, marketConditionId, evidenceHash], map: "uq_redflag_dedup")
+  @@index([walletId])
+  @@index([ruleKey])
+  @@index([marketConditionId])
+  @@index([triggeredAt])
+  @@index([walletId, triggeredAt])
+  @@index([ruleKey, triggeredAt])
+  @@map("red_flags")
+  @@schema("wallet")
+}
+
+model WalletScore {
+  id                String   @id @default(uuid()) @db.Uuid
+  walletId          String   @unique @map("wallet_id") @db.Uuid
+  wallet            Wallet   @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  totalScore        Float    @map("total_score")
+  flagCount         Int      @default(0) @map("flag_count")
+  highSeverityCount Int      @default(0) @map("high_severity_count")
+  lastComputedAt    DateTime @default(now()) @map("last_computed_at") @db.Timestamptz(6)
+  breakdownJson     Json     @map("breakdown_json")
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([lastComputedAt])
+  @@index([totalScore])
+  @@map("wallet_scores")
+  @@schema("wallet")
 }
