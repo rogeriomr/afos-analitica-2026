@@ -308,12 +308,14 @@ function OutcomeChart({
         <h4 className="text-sm font-semibold text-slate-900 dark:text-slate-100">{title}</h4>
         <div className="flex items-baseline gap-3 text-[11px] font-mono tabular-nums">
           <span>
+            {/* bestBid is the floor for "selling YES" → pushes price DOWN → RED */}
             <span className="text-slate-500">{labels.bestBid}: </span>
             <span className="text-red-700 dark:text-red-400">
               {bestBid != null ? formatPrice(bestBid) : '—'}
             </span>
           </span>
           <span>
+            {/* bestAsk is the ceiling for "buying YES" → pushes price UP → GREEN */}
             <span className="text-slate-500">{labels.bestAsk}: </span>
             <span className="text-emerald-700 dark:text-emerald-400">
               {bestAsk != null ? formatPrice(bestAsk) : '—'}
@@ -334,14 +336,16 @@ function OutcomeChart({
         </div>
       </header>
 
-      {/* Legend strip */}
+      {/* Legend strip — Color rationale: GREEN = action that PUSHES YES UP,
+          RED = action that PUSHES YES DOWN. This is the trader mental
+          model (green = bullish move, red = bearish move). */}
       <div className="px-4 py-1.5 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/50 flex items-center gap-3 flex-wrap text-[10px]">
         <span className="inline-flex items-center gap-1">
-          <span className="inline-block w-3 h-2 rounded-sm bg-red-300 dark:bg-red-700/60" />
+          <span className="inline-block w-3 h-2 rounded-sm bg-emerald-300 dark:bg-emerald-700/60" />
           <span className="text-slate-600 dark:text-slate-400">{labels.askLegend}</span>
         </span>
         <span className="inline-flex items-center gap-1">
-          <span className="inline-block w-3 h-2 rounded-sm bg-emerald-300 dark:bg-emerald-700/60" />
+          <span className="inline-block w-3 h-2 rounded-sm bg-red-300 dark:bg-red-700/60" />
           <span className="text-slate-600 dark:text-slate-400">{labels.bidLegend}</span>
         </span>
         <span className="inline-flex items-center gap-1">
@@ -350,11 +354,11 @@ function OutcomeChart({
         </span>
         <span className="ml-auto text-slate-500 dark:text-slate-500 font-mono tabular-nums">
           {labels.totalDepth}{' '}
-          <span className="text-emerald-700 dark:text-emerald-400">
+          <span className="text-red-700 dark:text-red-400">
             {formatUsd(enrichedBids.totalUsd)} bid
           </span>{' '}
           /{' '}
-          <span className="text-red-700 dark:text-red-400">
+          <span className="text-emerald-700 dark:text-emerald-400">
             {formatUsd(enrichedAsks.totalUsd)} ask
           </span>
         </span>
@@ -387,19 +391,21 @@ function OutcomeChart({
               </span>
             </div>
 
-            {/* Plain-language action box */}
+            {/* Plain-language action box — isAbove (pushing YES UP) is GREEN,
+                !isAbove (pushing YES DOWN) is RED. Matches every other color
+                surface in the chart. */}
             <div
               className={`rounded-md px-2 py-1.5 mb-2 ${
                 myHover.isAbove
-                  ? 'bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900'
-                  : 'bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-900'
+                  ? 'bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-900'
+                  : 'bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900'
               }`}
             >
               <div
                 className={`text-[10px] uppercase tracking-wider font-bold mb-1 ${
                   myHover.isAbove
-                    ? 'text-red-700 dark:text-red-400'
-                    : 'text-emerald-700 dark:text-emerald-400'
+                    ? 'text-emerald-700 dark:text-emerald-400'
+                    : 'text-red-700 dark:text-red-400'
                 }`}
               >
                 {myHover.isAbove ? labels.popupActionUp : labels.popupActionDown}
@@ -489,7 +495,9 @@ function OutcomeChart({
             />
           ))}
 
-          {/* Per-tick mini bars (log-scaled height, anchored to x-axis baseline) */}
+          {/* Per-tick mini bars (log-scaled height, anchored to x-axis baseline).
+              Color rationale: GREEN on the ask side (pushing YES UP); RED on
+              the bid side (pushing YES DOWN). */}
           {enrichedBids.levels.map((lv, i) => {
             const h = barHeight(lv.tickUsd);
             return (
@@ -499,7 +507,7 @@ function OutcomeChart({
                 y={yOf(0, sharedYMax) - h}
                 width={2}
                 height={h}
-                className="fill-emerald-400 dark:fill-emerald-500"
+                className="fill-red-400 dark:fill-red-500"
                 fillOpacity={0.5}
               />
             );
@@ -513,18 +521,18 @@ function OutcomeChart({
                 y={yOf(0, sharedYMax) - h}
                 width={2}
                 height={h}
-                className="fill-red-400 dark:fill-red-500"
+                className="fill-emerald-400 dark:fill-emerald-500"
                 fillOpacity={0.5}
               />
             );
           })}
 
-          {/* Cumulative area fills */}
+          {/* Cumulative area fills — ask side green (push UP), bid side red (push DOWN) */}
           {askArea && (
-            <path d={askArea} className="fill-red-300 dark:fill-red-900" fillOpacity={0.25} />
+            <path d={askArea} className="fill-emerald-300 dark:fill-emerald-900" fillOpacity={0.25} />
           )}
           {bidArea && (
-            <path d={bidArea} className="fill-emerald-300 dark:fill-emerald-900" fillOpacity={0.25} />
+            <path d={bidArea} className="fill-red-300 dark:fill-red-900" fillOpacity={0.25} />
           )}
 
           {/* Cumulative step lines on top */}
@@ -532,7 +540,7 @@ function OutcomeChart({
             <path
               d={askPath}
               fill="none"
-              className="stroke-red-600 dark:stroke-red-400"
+              className="stroke-emerald-600 dark:stroke-emerald-400"
               strokeWidth={1.5}
             />
           )}
@@ -540,7 +548,7 @@ function OutcomeChart({
             <path
               d={bidPath}
               fill="none"
-              className="stroke-emerald-600 dark:stroke-emerald-400"
+              className="stroke-red-600 dark:stroke-red-400"
               strokeWidth={1.5}
             />
           )}
@@ -569,12 +577,14 @@ function OutcomeChart({
                 ↕ preço atual: {formatPct(mid)}
               </text>
 
-              {/* Directional inline labels — left of mid + right of mid */}
+              {/* Directional inline labels — left side (pushing YES DOWN) RED,
+                  right side (pushing YES UP) GREEN. Matches the cumulative
+                  curve + bar color semantics. */}
               <text
                 x={xOf(mid) - 8}
                 y={VIEW.paddingTop + 14}
                 textAnchor="end"
-                className="fill-emerald-700 dark:fill-emerald-400"
+                className="fill-red-700 dark:fill-red-400"
                 fontSize={10}
                 fontWeight="600"
               >
@@ -584,7 +594,7 @@ function OutcomeChart({
                 x={xOf(mid) + 8}
                 y={VIEW.paddingTop + 14}
                 textAnchor="start"
-                className="fill-red-700 dark:fill-red-400"
+                className="fill-emerald-700 dark:fill-emerald-400"
                 fontSize={10}
                 fontWeight="600"
               >
@@ -825,7 +835,8 @@ function TickLadderCard({
     <div className="text-[11px] font-mono tabular-nums">
       <h4 className="text-sm font-semibold mb-2 font-sans">{title}</h4>
       <div className="rounded border border-slate-200 dark:border-slate-800 overflow-hidden">
-        <div className="px-3 py-1 bg-red-50/40 dark:bg-red-950/20 text-[10px] uppercase font-semibold text-red-700 dark:text-red-400">
+        {/* Asks = pushing YES UP → GREEN. Bids = pushing YES DOWN → RED. */}
+        <div className="px-3 py-1 bg-emerald-50/40 dark:bg-emerald-950/20 text-[10px] uppercase font-semibold text-emerald-700 dark:text-emerald-400">
           {t('wiMarket.obAsks')} ({asksDisplay.length})
         </div>
         <div className="grid grid-cols-[60px_1fr_1fr_1fr] gap-x-2 px-3 py-1 text-[10px] uppercase tracking-wider text-slate-400">
@@ -840,7 +851,7 @@ function TickLadderCard({
               key={`a-${lv.price}`}
               className="grid grid-cols-[60px_1fr_1fr_1fr] gap-x-2 px-3 py-0.5 hover:bg-slate-100 dark:hover:bg-slate-800/40"
             >
-              <span className="text-red-700 dark:text-red-400">{formatPrice(lv.price)}</span>
+              <span className="text-emerald-700 dark:text-emerald-400">{formatPrice(lv.price)}</span>
               <span className="text-right text-slate-700 dark:text-slate-300">
                 {formatShares(lv.size)}
               </span>
@@ -854,7 +865,7 @@ function TickLadderCard({
         <div className="px-3 py-1 bg-slate-100 dark:bg-slate-800/50 text-[10px] uppercase tracking-wider text-slate-500">
           spread {book.bestBid != null && book.bestAsk != null ? formatPrice(book.bestAsk - book.bestBid) : '—'}
         </div>
-        <div className="px-3 py-1 bg-emerald-50/40 dark:bg-emerald-950/20 text-[10px] uppercase font-semibold text-emerald-700 dark:text-emerald-400">
+        <div className="px-3 py-1 bg-red-50/40 dark:bg-red-950/20 text-[10px] uppercase font-semibold text-red-700 dark:text-red-400">
           {t('wiMarket.obBids')} ({bidsDisplay.length})
         </div>
         <div className="max-h-[280px] overflow-y-auto">
@@ -863,7 +874,7 @@ function TickLadderCard({
               key={`b-${lv.price}`}
               className="grid grid-cols-[60px_1fr_1fr_1fr] gap-x-2 px-3 py-0.5 hover:bg-slate-100 dark:hover:bg-slate-800/40"
             >
-              <span className="text-emerald-700 dark:text-emerald-400">{formatPrice(lv.price)}</span>
+              <span className="text-red-700 dark:text-red-400">{formatPrice(lv.price)}</span>
               <span className="text-right text-slate-700 dark:text-slate-300">
                 {formatShares(lv.size)}
               </span>
