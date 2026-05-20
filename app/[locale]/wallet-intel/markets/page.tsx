@@ -187,22 +187,40 @@ export default async function MarketsPage({ params }: PageProps) {
                           </p>
                         ) : (
                           <ul className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-                            {subMarkets.map((sub) => (
-                              <li key={sub.conditionId}>
-                                <Link
-                                  href={`/${locale}/wallet-intel/market/${sub.conditionId}`}
-                                  className="block p-2.5 rounded-md border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:border-primary hover:shadow-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-                                  title={sub.question}
-                                >
-                                  <p className="text-sm font-semibold text-slate-900 dark:text-slate-100 truncate">
-                                    {candidateLabel(sub.question)}
-                                  </p>
-                                  <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5 font-mono tabular-nums">
-                                    {t('wiMarkets.volumeLabel')} {formatVolume(sub.volume)}
-                                  </p>
-                                </Link>
-                              </li>
-                            ))}
+                            {subMarkets.map((sub) => {
+                              const yesPct = (sub.yesProbability ?? 0) * 100;
+                              // Color the probability chip by tier:
+                              //   ≥30%  → emerald (genuine favorite)
+                              //   ≥10%  → blue   (long-shot but plausible)
+                              //   <10%  → slate  (basically nobody believes)
+                              const probTier =
+                                yesPct >= 30
+                                  ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300'
+                                  : yesPct >= 10
+                                    ? 'bg-blue-100 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300'
+                                    : 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400';
+                              return (
+                                <li key={sub.conditionId}>
+                                  <Link
+                                    href={`/${locale}/wallet-intel/market/${sub.conditionId}`}
+                                    className="block p-2.5 rounded-md border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:border-primary hover:shadow-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                                    title={sub.question}
+                                  >
+                                    <div className="flex items-start justify-between gap-1.5">
+                                      <p className="text-sm font-semibold text-slate-900 dark:text-slate-100 truncate flex-1 min-w-0">
+                                        {candidateLabel(sub.question)}
+                                      </p>
+                                      <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-mono tabular-nums font-semibold ${probTier}`}>
+                                        {yesPct.toFixed(1)}%
+                                      </span>
+                                    </div>
+                                    <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1 font-mono tabular-nums">
+                                      {t('wiMarkets.volumeLabel')} {formatVolume(sub.volume)}
+                                    </p>
+                                  </Link>
+                                </li>
+                              );
+                            })}
                           </ul>
                         )}
                       </div>

@@ -31,6 +31,10 @@ export interface ResolvedSubMarket {
   marketSlug: string
   volume: number
   outcomes: string[]
+  /** Current YES probability ∈ [0,1] — the load-bearing favoritism signal.
+   * Volume is just turnover (YES+NO) so it misleads about who's likely to win.
+   * E.g. a $11M market where YES=0.35% means "everyone bets they LOSE", not "favorite". */
+  yesProbability: number
 }
 
 const CACHE_PREFIX = 'wallet-intel:slug-cid:'
@@ -93,7 +97,9 @@ export async function resolveActiveConditionIds(
     return []
   }
 
-  // Filter to active + open + valid conditionId, sort by volume desc, slice top N.
+  // Filter to active + open + valid conditionId, sort by YES probability desc
+  // (the REAL favoritism signal — volume conflates YES+NO turnover and ranks
+  // "most-contested" markets above "most-likely" candidates). Slice top N.
   const candidates: ResolvedSubMarket[] = event.markets
     .filter(
       (m: ParsedMarket) =>
@@ -109,8 +115,9 @@ export async function resolveActiveConditionIds(
       marketSlug: slug,
       volume: m.volume || 0,
       outcomes: m.outcomes ?? [],
+      yesProbability: typeof m.yesPrice === 'number' ? m.yesPrice : 0,
     }))
-    .sort((a, b) => b.volume - a.volume)
+    .sort((a, b) => b.yesProbability - a.yesProbability)
     .slice(0, topN)
 
   // Persist metadata for every sub-market we'll ingest. Best-effort — failure
