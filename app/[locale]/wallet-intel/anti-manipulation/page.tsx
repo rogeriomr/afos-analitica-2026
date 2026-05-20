@@ -1,8 +1,15 @@
+import { headers } from 'next/headers';
 import { getMessages } from '../../../../lib/i18n/get-messages';
 import { isValidLocale, type Locale } from '../../../../lib/i18n/config';
+import { fetchEventBySlug } from '../../../lib/polymarket/client';
+import { LiveBookDemo, type DemoCandidate } from '../../../components/wallet-intel/LiveBookDemo';
+import type { LiquidityImpactData } from '../../../components/wallet-intel/LiquidityImpactCard';
 
 export const runtime = 'nodejs';
-export const dynamic = 'force-static';
+// Was `force-static`; we now embed live orderbook data, so allow ISR with a
+// 60-second revalidation window. The client component polls on top of this
+// for sub-minute freshness.
+export const revalidate = 60;
 
 interface PageProps {
   params: Promise<{ locale: string }>;
@@ -24,6 +31,87 @@ function tFor(messages: Awaited<ReturnType<typeof getMessages>>) {
  */
 function interpolate(template: string, values: Record<string, string>): string {
   return template.replace(/\{(\w+)\}/g, (_, k) => (k in values ? values[k] : `{${k}}`));
+}
+
+/**
+ * Server-side fetch of the orderbook + impact payload from our own /api
+ * route. Mirrors the helper in market/[conditionId]/page.tsx — uses the
+ * inbound host header so it works locally and on any Vercel deploy. Returns
+ * null gracefully on any failure (host header missing, network error,
+ * non-2xx, malformed JSON, timeout).
+ */
+async function fetchOrderbookByConditionId(
+  conditionId: string,
+): Promise<LiquidityImpactData | null> {
+  try {
+    const h = await headers();
+    const host = h.get('host');
+    const proto = h.get('x-forwarded-proto') ?? (host?.includes('localhost') ? 'http' : 'https');
+    if (!host) return null;
+    const url = `${proto}://${host}/api/wallet-intel/market/${conditionId}/orderbook`;
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 5000);
+    let res: Response;
+    try {
+      res = await fetch(url, { signal: ctl.signal, next: { revalidate: 30 } });
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!res.ok) return null;
+    const json = (await res.json()) as LiquidityImpactData;
+    if (!json || typeof json !== 'object') return null;
+    return json;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolve Lula + Renan Santos as the two demo candidates for the
+ * live-book widget in section 2. Lula is the long-time favorite (~45%
+ * YES) and Renan is a long-tail candidate (~13% YES) — perfect contrast
+ * for showing how thin books amplify capital. Returns `[]` if Polymarket
+ * is unreachable so the page degrades silently.
+ */
+async function buildDemoCandidates(
+  t: (key: string, fallback?: string) => string,
+): Promise<DemoCandidate[]> {
+  const event = await fetchEventBySlug('brazil-presidential-election').catch(() => null);
+  if (!event || !Array.isArray(event.markets)) return [];
+
+  const findActive = (re: RegExp) =>
+    event.markets.find(
+      (m) => m.active && !m.closed && m.conditionId && re.test(m.question ?? ''),
+    );
+
+  // Lula: match "Luiz Inácio Lula" with various spellings (accent variants,
+  // shortened "Lula da Silva"). Restrict the regex to avoid catching
+  // unrelated candidates whose question text might mention his name.
+  const lula = findActive(/Luiz In[áa]cio Lula da Silva|Lula da Silva/i);
+  const renan = findActive(/Renan Santos/i);
+
+  const out: DemoCandidate[] = [];
+  if (lula) {
+    out.push({
+      id: 'lula',
+      label: t('wiAntiManip.liveLulaLabel'),
+      sublabel: t('wiAntiManip.liveLulaSublabel'),
+      conditionId: lula.conditionId,
+      question: lula.question ?? '',
+      initialData: await fetchOrderbookByConditionId(lula.conditionId),
+    });
+  }
+  if (renan) {
+    out.push({
+      id: 'renan',
+      label: t('wiAntiManip.liveRenanLabel'),
+      sublabel: t('wiAntiManip.liveRenanSublabel'),
+      conditionId: renan.conditionId,
+      question: renan.question ?? '',
+      initialData: await fetchOrderbookByConditionId(renan.conditionId),
+    });
+  }
+  return out;
 }
 
 /**
@@ -209,6 +297,12 @@ export default async function AntiManipulationPage({ params }: PageProps) {
 
   const asOf = t('wiAntiManip.asOfWriting');
 
+  // ── Live demo: resolve Lula + Renan Santos sub-markets + prefetch books ──
+  // Gracefully degrades — if Polymarket is unreachable from the server (BR ISP
+  // block, transient outage, etc.), demoCandidates is empty and the page falls
+  // back to the static numerical example above without breaking anything.
+  const demoCandidates: DemoCandidate[] = await buildDemoCandidates(t);
+
   return (
     <div className="space-y-6">
       <header>
@@ -294,6 +388,25 @@ export default async function AntiManipulationPage({ params }: PageProps) {
               </ul>
             </div>
             <p>{t('wiAntiManip.section2ExampleP2')}</p>
+
+            {/* Live demo — same chart as the market drill-down, but pre-loaded
+                with Lula (current favorite) and Renan Santos (long-tail) so
+                the analyst can SEE thin-book amplification in real data. Auto-
+                refreshes every 60s; survives Polymarket being unreachable from
+                the AFOS network (BR ISP blocks etc.). */}
+            {demoCandidates.length > 0 && (
+              <div className="not-prose mt-6 space-y-3">
+                <div className="space-y-1">
+                  <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100 m-0">
+                    {t('wiAntiManip.liveSectionTitle')}
+                  </h3>
+                  <p className="text-xs text-slate-600 dark:text-slate-400 m-0">
+                    {t('wiAntiManip.liveSectionSubtitle')}
+                  </p>
+                </div>
+                <LiveBookDemo candidates={demoCandidates} />
+              </div>
+            )}
           </section>
 
           {/* 3 NegRisk */}
