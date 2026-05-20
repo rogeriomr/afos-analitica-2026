@@ -33,7 +33,7 @@ const nextConfig = {
               "style-src 'self' 'unsafe-inline'",
               "img-src 'self' data: blob:",
               "font-src 'self'",
-              "connect-src 'self' https://gamma-api.polymarket.com https://news.google.com https://api.firecrawl.dev https://*.upstash.io" + (isDev ? " ws://localhost:*" : ""),
+              "connect-src 'self' https://gamma-api.polymarket.com https://news.google.com https://api.firecrawl.dev https://*.upstash.io https://data-api.polymarket.com https://clob.polymarket.com" + (isDev ? " ws://localhost:*" : ""),
               "frame-ancestors 'none'",
               "base-uri 'self'",
               "form-action 'self'",
