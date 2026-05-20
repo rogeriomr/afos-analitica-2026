@@ -16,7 +16,7 @@ import { defaultLocale } from './config';
 
 export type Messages = Record<string, Record<string, string | string[]>>;
 
-const NAMESPACES = ['common', 'home', 'about', 'seo'] as const;
+const NAMESPACES = ['common', 'home', 'about', 'seo', 'wallet-intel'] as const;
 
 const cache = new Map<string, Messages>();
 
