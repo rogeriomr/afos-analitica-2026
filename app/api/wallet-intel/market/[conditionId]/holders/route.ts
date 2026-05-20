@@ -2,7 +2,7 @@
  * GET /api/wallet-intel/market/[conditionId]/holders
  *
  * Returns latest holder snapshot for the market broken down **per outcome**.
- * For each outcome we expose the top-15 holders along with their share of
+ * For each outcome we expose the top-30 holders along with their share of
  * observed supply, plus per-outcome top-5/top-10 concentration metrics.
  *
  * Auth: gated by middleware (Basic auth via WALLET_INTEL_PASSWORD).
@@ -19,7 +19,7 @@ import {
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const TOP_PER_OUTCOME = 15;
+const TOP_PER_OUTCOME = 30;
 
 interface HolderEntry {
   proxyAddress: string;

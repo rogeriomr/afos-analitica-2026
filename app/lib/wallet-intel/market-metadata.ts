@@ -67,6 +67,52 @@ export async function getMarketQuestion(conditionId: string): Promise<string | n
 }
 
 /**
+ * Heuristic extractor for the candidate / subject name from a binary
+ * "Will X ... ?" prediction-market question. Bounded narrowly to
+ * **political-style** markets where YES means "supports X" and NO means
+ * "against X". Returns null for anything ambiguous so the UI safely
+ * skips rendering a "supports / against" subtitle.
+ *
+ * Positive examples (returns the captured name):
+ *   - "Will Tarcisio de Freitas win the 2026 Brazilian presidential election?"
+ *     → "Tarcisio de Freitas"
+ *   - "Will Vicky Dávila win the 2026 Colombian presidential election" → "Vicky Dávila"
+ *   - "Will Renan Santos finish in second place in the first round..."
+ *     → "Renan Santos"
+ *
+ * Negative cases (returns null) — explicitly NOT a candidate name:
+ *   - "Will Brazil's Annual Inflation in 2026 be less than 5%?"
+ *     (subject starts with possessive "Brazil's" → not a person)
+ *   - "Any Brazil STF Justice removed by impeachment before 2027"
+ *     (does not match the "Will <X> (win|finish|be|hit|reach)" pattern)
+ *   - "Will the Fed rate hit 5%" (subject contains "rate")
+ *   - "Will US GDP reach ..." (subject contains "gdp")
+ *   - "Will inflation be less than 5%" (subject contains "inflation")
+ *   - Anything whose verb is not in {win, finish, be, hit, reach}.
+ *
+ * The captured group is also lightly trimmed/sanitised: a name longer
+ * than 80 characters is treated as a bad capture and returns null
+ * (defensive — keeps malformed questions from rendering huge subtitles).
+ */
+export function extractCandidateFromQuestion(question: string | null | undefined): string | null {
+  if (!question) return null
+  // Capture group: subject before the binary verb. The verb list is
+  // intentionally short — adding more verbs widens the capture surface
+  // and starts matching non-political markets (price, weather, sports).
+  const m = question.match(/^Will\s+(.+?)\s+(?:win|finish|be|hit|reach)\b/i)
+  if (!m || !m[1]) return null
+  const name = m[1].trim()
+  if (name.length === 0 || name.length > 80) return null
+  // Drop possessive "<X>'s" subjects ("Brazil's Annual Inflation ...")
+  // — these are abstract subjects, not people we can say "supports".
+  if (/'s$/.test(name)) return null
+  // Drop subjects that obviously refer to macro/sport/weather topics
+  // rather than a candidate. This list is the load-bearing safety net.
+  if (/\b(inflation|election|justice|annual|gdp|rate|price|stock|index|temperature|weather|impeachment)\b/i.test(name)) return null
+  return name
+}
+
+/**
  * Batch variant for list pages rendering N markets at once. Issues a
  * single `IN (...)` query and groups results by conditionId. Markets
  * with no stored metadata are simply absent from the returned Map —

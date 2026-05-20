@@ -166,7 +166,18 @@
     "totalSupply": "Total observado",
     "sharePctHeader": "% da supply observada",
     "noSnapshot": "Snapshot do mercado ainda não foi ingerido. Próximo cron em ~2h.",
-    "concentrationPerOutcome": "Concentração — {name}"
+    "concentrationPerOutcome": "Concentração — {name}",
+    "tfHeader": "Período",
+    "tf24h": "24h",
+    "tf7d": "7d",
+    "tf30d": "30d",
+    "tfAll": "Tudo",
+    "whalesPanelTitle": "Whales — {timeframe}",
+    "whaleYesPct": "% YES",
+    "whaleNoPct": "% NO",
+    "whaleNoSupplyData": "—",
+    "outcomeSubtitleSupports": "Apoia {name}",
+    "outcomeSubtitleAgainst": "Contra {name}"
   },
   "wiLeaderboard": {
     "title": "Ranking global de carteiras",

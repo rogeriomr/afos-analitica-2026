@@ -396,61 +396,158 @@ export async function getMarketHolders(
 
 // ─── /market/[conditionId]/whales ─────────────────────────────────────
 
+export type WhalesTimeframe = '24h' | '7d' | '30d' | 'all';
+
+export interface WhaleEntry {
+  proxyAddress: string;
+  username: string | null;
+  totalValueUsd: number;
+  tradeCount: number;
+  totalScore: number | null;
+  flagCount: number | null;
+  /**
+   * Wallet's share of the latest MarketHolderSnapshot supply on outcomeIndex=0
+   * (canonically "Yes"). null when no snapshot or wallet absent from snapshot.
+   */
+  yesSupplyPct: number | null;
+  /** Same for outcomeIndex=1 ("No"). */
+  noSupplyPct: number | null;
+}
+
 export interface WhalesResponse {
   conditionId: string;
-  whales: Array<{
-    proxyAddress: string;
-    username?: string;
-    totalValueUsd30d: number;
-    tradeCount30d: number;
-    totalScore: number | null;
-    flagCount: number | null;
-  }>;
+  timeframe: WhalesTimeframe;
+  whales: WhaleEntry[];
+}
+
+function sinceForTimeframe(tf: WhalesTimeframe): Date | null {
+  switch (tf) {
+    case '24h':
+      return new Date(Date.now() - ONE_DAY_MS);
+    case '7d':
+      return new Date(Date.now() - SEVEN_DAYS_MS);
+    case '30d':
+      return new Date(Date.now() - THIRTY_DAYS_MS);
+    case 'all':
+      return null;
+  }
+}
+
+interface SnapshotEntry {
+  proxyAddress: string;
+  amount: number;
+  outcomeIndex: number;
+}
+
+function parseSnapshotHoldersForWhales(raw: unknown): SnapshotEntry[] {
+  if (!Array.isArray(raw)) return [];
+  const out: SnapshotEntry[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const obj = item as Record<string, unknown>;
+    const addr = (obj.holder ?? obj.proxyAddress ?? obj.address ?? obj.proxy_address) as unknown;
+    if (typeof addr !== 'string') continue;
+    const outcomeIndexRaw =
+      typeof obj.outcomeIndex === 'number'
+        ? obj.outcomeIndex
+        : typeof obj.outcome_index === 'number'
+          ? obj.outcome_index
+          : 0;
+    out.push({
+      proxyAddress: addr.toLowerCase(),
+      amount: coerceNumber(obj.amount ?? obj.size ?? obj.shares),
+      outcomeIndex: Number.isInteger(outcomeIndexRaw) ? outcomeIndexRaw : 0,
+    });
+  }
+  return out;
 }
 
 export async function getMarketWhales(
   conditionId: string,
+  timeframe: WhalesTimeframe = '30d',
 ): Promise<WhalesResponse | { error: string }> {
   if (!prisma) return { error: 'database_unavailable' };
 
-  const since = new Date(Date.now() - THIRTY_DAYS_MS);
+  const since = sinceForTimeframe(timeframe);
 
   const grouped = await prisma.walletTrade.groupBy({
     by: ['walletId'],
-    where: { marketConditionId: conditionId, tradeTimestamp: { gte: since } },
+    where: {
+      marketConditionId: conditionId,
+      ...(since ? { tradeTimestamp: { gte: since } } : {}),
+    },
     _sum: { valueUsd: true },
     _count: { _all: true },
     orderBy: { _sum: { valueUsd: 'desc' } },
     take: 20,
   });
-  if (grouped.length === 0) return { conditionId, whales: [] };
+  if (grouped.length === 0) return { conditionId, timeframe, whales: [] };
 
   const walletIds = grouped.map((g) => g.walletId);
-  const wallets = await prisma.wallet.findMany({
-    where: { id: { in: walletIds } },
-    include: {
-      profile: { select: { username: true } },
-      score: { select: { totalScore: true, flagCount: true } },
-    },
-  });
+  const [wallets, snapshot] = await Promise.all([
+    prisma.wallet.findMany({
+      where: { id: { in: walletIds } },
+      include: {
+        profile: { select: { username: true } },
+        score: { select: { totalScore: true, flagCount: true } },
+      },
+    }),
+    prisma.marketHolderSnapshot.findFirst({
+      where: { marketConditionId: conditionId },
+      orderBy: { snapshotAt: 'desc' },
+      select: { holdersJson: true },
+    }),
+  ]);
   const walletById = new Map(wallets.map((w) => [w.id, w]));
 
-  const whales = grouped
-    .map((g) => {
+  // Build supply lookups for the binary outcomes (index 0 + 1). Multi-
+  // outcome markets aren't represented in the response shape yet — when
+  // the schema starts allowing >2 outcomes, the per-outcome columns
+  // here will need to become an array, not yes/no fields.
+  let totalIdx0 = 0;
+  let totalIdx1 = 0;
+  const byAddr = new Map<string, { i0: number; i1: number }>();
+  if (snapshot) {
+    for (const e of parseSnapshotHoldersForWhales(snapshot.holdersJson)) {
+      if (e.outcomeIndex === 0) totalIdx0 += e.amount;
+      else if (e.outcomeIndex === 1) totalIdx1 += e.amount;
+      const slot = byAddr.get(e.proxyAddress) ?? { i0: 0, i1: 0 };
+      if (e.outcomeIndex === 0) slot.i0 += e.amount;
+      else if (e.outcomeIndex === 1) slot.i1 += e.amount;
+      byAddr.set(e.proxyAddress, slot);
+    }
+  }
+
+  const supplyPct = (addr: string, idx: 0 | 1): number | null => {
+    if (!snapshot) return null;
+    const total = idx === 0 ? totalIdx0 : totalIdx1;
+    if (total <= 0) return null;
+    const slot = byAddr.get(addr);
+    if (!slot) return null;
+    const amt = idx === 0 ? slot.i0 : slot.i1;
+    if (amt <= 0) return null;
+    return Math.min(100, (amt / total) * 100);
+  };
+
+  const whales: WhaleEntry[] = grouped
+    .map((g): WhaleEntry | null => {
       const w = walletById.get(g.walletId);
       if (!w) return null;
+      const addr = w.proxyAddress;
       return {
-        proxyAddress: w.proxyAddress,
-        username: w.profile?.username ?? undefined,
-        totalValueUsd30d: g._sum.valueUsd ?? 0,
-        tradeCount30d: g._count._all,
+        proxyAddress: addr,
+        username: w.profile?.username ?? null,
+        totalValueUsd: g._sum.valueUsd ?? 0,
+        tradeCount: g._count._all,
         totalScore: w.score?.totalScore ?? null,
         flagCount: w.score?.flagCount ?? null,
+        yesSupplyPct: supplyPct(addr, 0),
+        noSupplyPct: supplyPct(addr, 1),
       };
     })
-    .filter((v): v is NonNullable<typeof v> => v !== null);
+    .filter((v): v is WhaleEntry => v !== null);
 
-  return { conditionId, whales };
+  return { conditionId, timeframe, whales };
 }
 
 // ─── /wallet/[addr] — position-building sessions ──────────────────────

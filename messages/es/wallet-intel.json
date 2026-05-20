@@ -166,7 +166,18 @@
     "totalSupply": "Total observado",
     "sharePctHeader": "% del supply observado",
     "noSnapshot": "Snapshot del mercado aún no ingerido. Próximo cron en ~2h.",
-    "concentrationPerOutcome": "Concentración — {name}"
+    "concentrationPerOutcome": "Concentración — {name}",
+    "tfHeader": "Período",
+    "tf24h": "24h",
+    "tf7d": "7d",
+    "tf30d": "30d",
+    "tfAll": "Todo",
+    "whalesPanelTitle": "Whales — {timeframe}",
+    "whaleYesPct": "% YES",
+    "whaleNoPct": "% NO",
+    "whaleNoSupplyData": "—",
+    "outcomeSubtitleSupports": "Apoya a {name}",
+    "outcomeSubtitleAgainst": "Contra {name}"
   },
   "wiLeaderboard": {
     "title": "Ranking global de billeteras",

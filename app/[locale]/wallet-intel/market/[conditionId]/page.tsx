@@ -3,20 +3,21 @@ import { getMessages } from '../../../../../lib/i18n/get-messages';
 import { isValidLocale, type Locale } from '../../../../../lib/i18n/config';
 import { getMarketHolders, getMarketWhales } from '../../../../lib/wallet-intel/queries';
 import {
+  extractCandidateFromQuestion,
   getMarketOutcomes,
   getMarketQuestion,
 } from '../../../../lib/wallet-intel/market-metadata';
 import { WalletAddress } from '../../../../components/wallet-intel/WalletAddress';
 import { ConcentrationMeter } from '../../../../components/wallet-intel/ConcentrationMeter';
-import { ScoreGauge } from '../../../../components/wallet-intel/ScoreGauge';
 import { RelativeTime } from '../../../../components/wallet-intel/RelativeTime';
+import { WhalesPanel } from '../../../../components/wallet-intel/WhalesPanel';
 import { ELECTION_REGISTRY, getFlagPath } from '../../../../lib/polymarket/country-market-map';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const CONDITION_RE = /^0x[a-f0-9]{64}$/;
-const TOP_PER_OUTCOME = 15;
+const TOP_PER_OUTCOME = 30;
 
 interface PageProps {
   params: Promise<{ locale: string; conditionId: string }>;
@@ -30,10 +31,6 @@ function tFor(messages: Awaited<ReturnType<typeof getMessages>>) {
     if (Array.isArray(v)) return v.join(', ');
     return fallback ?? key;
   };
-}
-
-function formatNumber(n: number): string {
-  return n.toLocaleString('en-US', { maximumFractionDigits: 2 });
 }
 
 function formatCompact(n: number): string {
@@ -171,14 +168,44 @@ export default async function MarketDetailPage({ params }: PageProps) {
 
   const slug = holders.marketSlug;
   const registryEntry = ELECTION_REGISTRY.find((e) => e.slug === slug);
-  const whalesList = 'whales' in whales ? whales.whales : [];
 
   const outcomes = buildOutcomeBlocks(holders.allHoldersSorted, outcomeMeta);
+
+  // Bind a candidate name from the market question so we can render
+  // a "supports X / against X" subtitle under each outcome header for
+  // binary political markets only. Returns null for non-political
+  // markets — see extractCandidateFromQuestion for the negative cases.
+  const candidate = extractCandidateFromQuestion(marketQuestion);
+  const supportsTpl = t('wiMarket.outcomeSubtitleSupports');
+  const againstTpl = t('wiMarket.outcomeSubtitleAgainst');
+
+  function outcomeSubtitle(name: string | null, index: number): string | null {
+    if (!candidate || !name) return null;
+    // outcomeIndex 0 = YES in Polymarket binary markets; outcomeIndex 1 = NO.
+    // Also gate by name in case ordering is ever inverted upstream.
+    const lower = name.toLowerCase();
+    if (index === 0 || lower === 'yes' || lower === 'sim' || lower === 'sí') {
+      return applyPlaceholders(supportsTpl, { name: candidate });
+    }
+    if (index === 1 || lower === 'no' || lower === 'não') {
+      return applyPlaceholders(againstTpl, { name: candidate });
+    }
+    return null;
+  }
 
   const outcomeUnknownTpl = t('wiMarket.outcomeUnknown');
   const holderCountTpl = t('wiMarket.holderCount');
   const concentrationPerOutcomeTpl = t('wiMarket.concentrationPerOutcome');
   const concentrationWord = t('wiMarket.concentrationTitle');
+
+  // Initial whales payload. The interactive panel may later replace
+  // this with the same shape via the API once the user picks a
+  // different timeframe.
+  const initialWhalesData = {
+    conditionId,
+    timeframe: '30d' as const,
+    whales: 'whales' in whales ? whales.whales : [],
+  };
 
   const titleFallback = registryEntry
     ? `${registryEntry.countryName} — ${registryEntry.electionType}`
@@ -236,15 +263,21 @@ export default async function MarketDetailPage({ params }: PageProps) {
           outcomes.map((o) => {
             const displayName =
               o.name ?? applyPlaceholders(outcomeUnknownTpl, { index: o.index });
+            const subtitle = outcomeSubtitle(o.name, o.index);
             return (
               <article
                 key={o.index}
                 className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden"
               >
-                <header className="px-4 sm:px-5 py-3 border-b border-slate-200 dark:border-slate-800 flex items-center gap-3 flex-wrap">
-                  <h3 className="text-base font-semibold text-slate-900 dark:text-slate-100">
-                    {displayName}
-                  </h3>
+                <header className="px-4 sm:px-5 py-3 border-b border-slate-200 dark:border-slate-800 flex items-start gap-3 flex-wrap">
+                  <div className="flex-1 min-w-0">
+                    <h3 className="text-base font-semibold text-slate-900 dark:text-slate-100">
+                      {displayName}
+                    </h3>
+                    {subtitle && (
+                      <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{subtitle}</p>
+                    )}
+                  </div>
                   <span className="inline-flex items-center rounded-full bg-slate-100 dark:bg-slate-800 px-2 py-0.5 text-[11px] font-mono tabular-nums text-slate-600 dark:text-slate-300">
                     {t('wiMarket.totalSupply')}: {formatCompact(o.totalObservedSupply)}
                   </span>
@@ -325,46 +358,11 @@ export default async function MarketDetailPage({ params }: PageProps) {
         )}
       </section>
 
-      <section className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden">
-        <header className="px-4 sm:px-5 py-3 border-b border-slate-200 dark:border-slate-800">
-          <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">{t('wiMarket.whalesTitle')}</h2>
-          <p className="text-xs text-slate-500 dark:text-slate-400">{t('wiMarket.whalesSubtitle')}</p>
-        </header>
-        {whalesList.length === 0 ? (
-          <p className="px-4 sm:px-5 py-6 text-sm text-slate-500 dark:text-slate-400">{t('wiMarket.whalesEmpty')}</p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-sm">
-              <thead className="bg-slate-50 dark:bg-slate-800/60 text-left text-[11px] uppercase tracking-wider text-slate-500 dark:text-slate-400">
-                <tr>
-                  <th className="px-3 py-2.5 font-semibold w-12">{t('wi.rank')}</th>
-                  <th className="px-3 py-2.5 font-semibold">{t('wiFlagged.colAddress')}</th>
-                  <th className="px-3 py-2.5 font-semibold">{t('wiFlagged.colUsername')}</th>
-                  <th className="px-3 py-2.5 font-semibold text-right">{t('wiMarket.colVolume30d')}</th>
-                  <th className="px-3 py-2.5 font-semibold text-right">{t('wiMarket.colTradeCount')}</th>
-                  <th className="px-3 py-2.5 font-semibold w-[160px]">{t('wiMarket.colScore')}</th>
-                  <th className="px-3 py-2.5 font-semibold text-right">{t('wiMarket.colFlagCount')}</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
-                {whalesList.map((w, i) => (
-                  <tr key={w.proxyAddress} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
-                    <td className="px-3 py-2 text-slate-500 font-mono tabular-nums text-xs">{i + 1}</td>
-                    <td className="px-3 py-2 whitespace-nowrap">
-                      <WalletAddress address={w.proxyAddress} href={`/${locale}/wallet-intel/wallet/${w.proxyAddress}`} />
-                    </td>
-                    <td className="px-3 py-2 text-slate-700 dark:text-slate-300">{w.username ?? <span className="text-slate-400 dark:text-slate-600">—</span>}</td>
-                    <td className="px-3 py-2 text-right font-mono tabular-nums text-xs">${formatNumber(w.totalValueUsd30d)}</td>
-                    <td className="px-3 py-2 text-right font-mono tabular-nums text-xs">{w.tradeCount30d.toLocaleString()}</td>
-                    <td className="px-3 py-2"><ScoreGauge score={w.totalScore} variant="compact" emptyLabel="—" /></td>
-                    <td className="px-3 py-2 text-right font-mono tabular-nums text-xs">{w.flagCount ?? '—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
+      <WhalesPanel
+        conditionId={conditionId}
+        locale={locale}
+        initialData={initialWhalesData}
+      />
     </div>
   );
 }

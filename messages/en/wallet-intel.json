@@ -166,7 +166,18 @@
     "totalSupply": "Total observed",
     "sharePctHeader": "% of observed supply",
     "noSnapshot": "Market snapshot not ingested yet. Next cron in ~2h.",
-    "concentrationPerOutcome": "Concentration — {name}"
+    "concentrationPerOutcome": "Concentration — {name}",
+    "tfHeader": "Timeframe",
+    "tf24h": "24h",
+    "tf7d": "7d",
+    "tf30d": "30d",
+    "tfAll": "All",
+    "whalesPanelTitle": "Whales — {timeframe}",
+    "whaleYesPct": "% YES",
+    "whaleNoPct": "% NO",
+    "whaleNoSupplyData": "—",
+    "outcomeSubtitleSupports": "Supports {name}",
+    "outcomeSubtitleAgainst": "Against {name}"
   },
   "wiLeaderboard": {
     "title": "Global wallet leaderboard",
