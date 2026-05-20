@@ -154,10 +154,14 @@ async function fetchWithRetry(url: string, retries: number = MAX_RETRIES): Promi
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);
 
+      // Network/timeout failures are transient (DNS block, ISP filter, upstream
+      // down). They're expected at API boundaries and recovered by the circuit
+      // breaker / fallback paths — log as warn, not error, so Next.js dev
+      // overlay doesn't surface them as blocking bugs.
       if (msg.includes('aborted')) {
-        console.error(`[polymarket-client] Timeout (${DEFAULT_TIMEOUT_MS}ms): ${url}`);
+        console.warn(`[polymarket-client] Timeout (${DEFAULT_TIMEOUT_MS}ms): ${url}`);
       } else {
-        console.error(`[polymarket-client] Network error: ${msg}`);
+        console.warn(`[polymarket-client] Network error: ${msg}`);
       }
 
       if (attempt < retries) {
