@@ -4,6 +4,18 @@ interface Props {
   percent: number;
   /** Right-side caption (e.g., "Top 5"). */
   caption?: string;
+  /**
+   * Optional outcome name (e.g. "Lula"). When provided the meter prefixes its
+   * label with "Concentration — {outcomeName}" instead of the bare `label`.
+   * Existing callers without this prop keep their previous behaviour.
+   */
+  outcomeName?: string;
+  /**
+   * Optional translated "Concentration" word — passed in so the component
+   * stays presentational and doesn't need to grow an i18n dependency.
+   * Defaults to "Concentration" when missing.
+   */
+  concentrationLabel?: string;
 }
 
 function colorFor(pct: number): string {
@@ -20,12 +32,21 @@ function textColorFor(pct: number): string {
   return 'text-emerald-600 dark:text-emerald-300';
 }
 
-export function ConcentrationMeter({ label, percent, caption }: Props) {
+export function ConcentrationMeter({
+  label,
+  percent,
+  caption,
+  outcomeName,
+  concentrationLabel = 'Concentration',
+}: Props) {
   const clamped = Math.max(0, Math.min(100, percent));
+  const displayLabel = outcomeName
+    ? `${concentrationLabel} — ${outcomeName} · ${label}`
+    : label;
   return (
     <div className="w-full">
       <div className="flex items-baseline justify-between mb-1.5">
-        <span className="text-xs font-medium text-slate-600 dark:text-slate-400">{label}</span>
+        <span className="text-xs font-medium text-slate-600 dark:text-slate-400">{displayLabel}</span>
         <span className={`text-lg font-bold tabular-nums ${textColorFor(clamped)}`}>
           {clamped.toFixed(1)}%
         </span>
@@ -36,7 +57,7 @@ export function ConcentrationMeter({ label, percent, caption }: Props) {
         aria-valuenow={Math.round(clamped)}
         aria-valuemin={0}
         aria-valuemax={100}
-        aria-label={label}
+        aria-label={displayLabel}
       >
         <div className={`${colorFor(clamped)} h-full transition-[width] duration-300`} style={{ width: `${clamped}%` }} />
       </div>
