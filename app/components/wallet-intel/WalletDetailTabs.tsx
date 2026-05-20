@@ -1,10 +1,9 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useTranslation } from '../../i18n/context';
 import { FlagCard } from './FlagCard';
 import { RelativeTime } from './RelativeTime';
-import { WalletAddress } from './WalletAddress';
 
 interface Position {
   marketConditionId: string;
@@ -49,17 +48,65 @@ interface Profile {
   lastFetchedAt: string;
 }
 
+/**
+ * Server-serialised counterpart of {@link PositionBuildSession} in queries.ts —
+ * Date fields flattened to ISO strings so they can cross the SSR→client boundary.
+ */
+export interface SerializablePositionBuildSession {
+  marketConditionId: string;
+  marketSlug: string;
+  outcomeIndex: number | null;
+  outcomeName: string | null;
+  side: 'BUY' | 'SELL';
+  sessionStart: string;
+  sessionEnd: string;
+  durationMs: number;
+  tradeCount: number;
+  totalVolumeUsd: number;
+  priceStart: number | null;
+  priceEnd: number | null;
+  probabilityDeltaPct: number | null;
+}
+
+/** Plain-object map (conditionId → { outcomeIndex string → outcomeName }). */
+export type OutcomesByCondition = Record<string, Record<string, string>>;
+
 interface Props {
   flags: Flag[];
   positions: Position[];
   trades: Trade[];
   profile: Profile | null;
+  positionBuilds: SerializablePositionBuildSession[];
+  outcomesByConditionId: OutcomesByCondition;
 }
 
-type TabKey = 'flags' | 'positions' | 'trades' | 'profile';
+type TabKey = 'flags' | 'positions' | 'trades' | 'profile' | 'positionBuilds';
+
+type PbSortKey = 'sessionStart' | 'durationMs' | 'tradeCount' | 'totalVolumeUsd' | 'probabilityDeltaPct';
+type SortDir = 'asc' | 'desc';
 
 function formatUsd(n: number): string {
   return n.toLocaleString('en-US', { maximumFractionDigits: 2, minimumFractionDigits: 0 });
+}
+
+/** USD with k/M abbreviations — used by the position-build volume column. */
+function formatUsdShort(n: number): string {
+  const abs = Math.abs(n);
+  if (abs >= 1_000_000) return `$${(n / 1_000_000).toFixed(abs >= 10_000_000 ? 1 : 2)}M`;
+  if (abs >= 1_000) return `$${(n / 1_000).toFixed(abs >= 10_000 ? 1 : 2)}k`;
+  return `$${n.toFixed(0)}`;
+}
+
+function formatDuration(ms: number): string {
+  const totalMin = Math.max(0, Math.round(ms / 60_000));
+  if (totalMin < 1) return '<1min';
+  if (totalMin < 60) return `${totalMin}min`;
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  if (h < 24) return m === 0 ? `${h}h` : `${h}h ${m}min`;
+  const d = Math.floor(h / 24);
+  const rh = h % 24;
+  return rh === 0 ? `${d}d` : `${d}d ${rh}h`;
 }
 
 function pnlClass(n: number): string {
@@ -68,14 +115,103 @@ function pnlClass(n: number): string {
   return 'text-slate-600 dark:text-slate-400';
 }
 
-export function WalletDetailTabs({ flags, positions, trades, profile }: Props) {
+/**
+ * Format the probability delta as a colored chip.
+ * Threshold: |delta| > 0.5pp gates the color, otherwise neutral slate.
+ */
+function ProbabilityChip({
+  priceStart,
+  priceEnd,
+  deltaPct,
+  noDataLabel,
+}: {
+  priceStart: number | null;
+  priceEnd: number | null;
+  deltaPct: number | null;
+  noDataLabel: string;
+}) {
+  if (priceStart == null || priceEnd == null || deltaPct == null) {
+    return (
+      <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+        {noDataLabel}
+      </span>
+    );
+  }
+  let tone = 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300';
+  if (deltaPct > 0.5) tone = 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300';
+  else if (deltaPct < -0.5) tone = 'bg-red-100 text-red-800 dark:bg-red-950/50 dark:text-red-300';
+
+  const sign = deltaPct > 0 ? '+' : '';
+  const startPct = (priceStart * 100).toFixed(0);
+  const endPct = (priceEnd * 100).toFixed(0);
+  return (
+    <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-semibold ${tone}`}>
+      <span>{sign}{deltaPct.toFixed(1)}pp</span>
+      <span className="font-mono text-[10px] opacity-80">({startPct}% → {endPct}%)</span>
+    </span>
+  );
+}
+
+export function WalletDetailTabs({
+  flags,
+  positions,
+  trades,
+  profile,
+  positionBuilds,
+  outcomesByConditionId,
+}: Props) {
   const { t } = useTranslation();
   const [tab, setTab] = useState<TabKey>(flags.length > 0 ? 'flags' : 'positions');
+
+  // Position-building sort state — default newest first.
+  const [pbSort, setPbSort] = useState<{ key: PbSortKey; dir: SortDir }>({
+    key: 'sessionStart',
+    dir: 'desc',
+  });
+
+  const sortedPositionBuilds = useMemo(() => {
+    const arr = positionBuilds.slice();
+    const { key, dir } = pbSort;
+    const sign = dir === 'asc' ? 1 : -1;
+    arr.sort((a, b) => {
+      const av: number = key === 'sessionStart' ? new Date(a.sessionStart).getTime() : (a[key] ?? -Infinity);
+      const bv: number = key === 'sessionStart' ? new Date(b.sessionStart).getTime() : (b[key] ?? -Infinity);
+      if (av < bv) return -1 * sign;
+      if (av > bv) return 1 * sign;
+      return 0;
+    });
+    return arr;
+  }, [positionBuilds, pbSort]);
+
+  // If more than half of the sessions have no price data we surface a hint
+  // banner so the user understands why the chips are mostly "—".
+  const missingPriceShare = positionBuilds.length === 0
+    ? 0
+    : positionBuilds.filter((s) => s.priceStart == null || s.priceEnd == null).length / positionBuilds.length;
+  const showNoPriceBanner = positionBuilds.length > 0 && missingPriceShare > 0.5;
+
+  function setPbSortFor(key: PbSortKey) {
+    setPbSort((prev) => prev.key === key ? { key, dir: prev.dir === 'desc' ? 'asc' : 'desc' } : { key, dir: 'desc' });
+  }
+
+  function pbSortIndicator(key: PbSortKey) {
+    if (pbSort.key !== key) return '';
+    return pbSort.dir === 'desc' ? ' ↓' : ' ↑';
+  }
+
+  /** Resolve an outcome name from the parent-passed map; returns null on miss. */
+  function outcomeNameFor(conditionId: string, outcomeIndex: number | null): string | null {
+    if (outcomeIndex == null) return null;
+    const bucket = outcomesByConditionId[conditionId];
+    if (!bucket) return null;
+    return bucket[String(outcomeIndex)] ?? null;
+  }
 
   const tabs: Array<{ key: TabKey; label: string; count?: number }> = [
     { key: 'flags', label: t('wiWallet.tabFlags'), count: flags.length },
     { key: 'positions', label: t('wiWallet.tabPositions'), count: positions.length },
     { key: 'trades', label: t('wiWallet.tabTrades'), count: trades.length },
+    { key: 'positionBuilds', label: t('wiWallet.tabPositionBuilds'), count: positionBuilds.length },
     { key: 'profile', label: t('wiWallet.tabProfile') },
   ];
 
@@ -176,6 +312,7 @@ export function WalletDetailTabs({ flags, positions, trades, profile }: Props) {
                   <tr>
                     <th className="px-3 py-2.5 font-semibold">{t('wiWallet.colTime')}</th>
                     <th className="px-3 py-2.5 font-semibold">{t('wiWallet.colMarket')}</th>
+                    <th className="px-3 py-2.5 font-semibold">{t('wiWallet.colOutcome')}</th>
                     <th className="px-3 py-2.5 font-semibold">{t('wiWallet.colSide')}</th>
                     <th className="px-3 py-2.5 font-semibold text-right">{t('wiWallet.colSize')}</th>
                     <th className="px-3 py-2.5 font-semibold text-right">{t('wiWallet.colPrice')}</th>
@@ -184,35 +321,160 @@ export function WalletDetailTabs({ flags, positions, trades, profile }: Props) {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200 dark:divide-slate-800 font-mono tabular-nums text-xs">
-                  {trades.map((tr, i) => (
-                    <tr key={`${tr.transactionHash}-${i}`} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
-                      <td className="px-3 py-2 font-sans"><RelativeTime iso={tr.tradeTimestamp} className="text-slate-600 dark:text-slate-400" /></td>
-                      <td className="px-3 py-2 font-sans truncate max-w-[220px]" title={tr.marketSlug}>{tr.marketSlug || tr.marketConditionId.slice(0, 14) + '...'}</td>
-                      <td className="px-3 py-2 font-sans">
-                        <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase ${
-                          tr.side.toUpperCase() === 'BUY' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300' : 'bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-300'
-                        }`}>
-                          {tr.side}
-                        </span>
-                      </td>
-                      <td className="px-3 py-2 text-right">{tr.size.toFixed(2)}</td>
-                      <td className="px-3 py-2 text-right">{tr.price.toFixed(3)}</td>
-                      <td className="px-3 py-2 text-right">${formatUsd(tr.valueUsd)}</td>
-                      <td className="px-3 py-2">
-                        <a
-                          href={`https://polygonscan.com/tx/${tr.transactionHash}`}
-                          target="_blank"
-                          rel="noreferrer noopener"
-                          className="text-primary hover:underline font-mono"
-                          title={t('wi.polygonscan')}
-                        >
-                          {tr.transactionHash.slice(0, 8)}...
-                        </a>
-                      </td>
-                    </tr>
-                  ))}
+                  {trades.map((tr, i) => {
+                    const resolvedName = outcomeNameFor(tr.marketConditionId, tr.outcomeIndex);
+                    return (
+                      <tr key={`${tr.transactionHash}-${i}`} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                        <td className="px-3 py-2 font-sans"><RelativeTime iso={tr.tradeTimestamp} className="text-slate-600 dark:text-slate-400" /></td>
+                        <td className="px-3 py-2 font-sans truncate max-w-[220px]" title={tr.marketSlug}>{tr.marketSlug || tr.marketConditionId.slice(0, 14) + '...'}</td>
+                        <td className="px-3 py-2 font-sans">
+                          {resolvedName ? (
+                            <span>{resolvedName}{tr.outcomeIndex != null && <span className="text-slate-400"> ({tr.outcomeIndex})</span>}</span>
+                          ) : (
+                            <span className="text-slate-500">{tr.outcomeIndex == null ? '—' : `Outcome ${tr.outcomeIndex}`}</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2 font-sans">
+                          <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase ${
+                            tr.side.toUpperCase() === 'BUY' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300' : 'bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-300'
+                          }`}>
+                            {tr.side}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2 text-right">{tr.size.toFixed(2)}</td>
+                        <td className="px-3 py-2 text-right">{tr.price.toFixed(3)}</td>
+                        <td className="px-3 py-2 text-right">${formatUsd(tr.valueUsd)}</td>
+                        <td className="px-3 py-2">
+                          <a
+                            href={`https://polygonscan.com/tx/${tr.transactionHash}`}
+                            target="_blank"
+                            rel="noreferrer noopener"
+                            className="text-primary hover:underline font-mono"
+                            title={t('wi.polygonscan')}
+                          >
+                            {tr.transactionHash.slice(0, 8)}...
+                          </a>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
+            </div>
+          )
+        )}
+
+        {tab === 'positionBuilds' && (
+          positionBuilds.length === 0 ? (
+            <p className="text-sm text-slate-500 dark:text-slate-400">{t('wiWallet.pbEmpty')}</p>
+          ) : (
+            <div className="space-y-3">
+              {showNoPriceBanner && (
+                <div className="rounded-lg border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/30 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">
+                  {t('wiWallet.pbNoPriceHistory')}
+                </div>
+              )}
+              <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-x-auto">
+                <table className="min-w-full text-sm">
+                  <thead className="bg-slate-50 dark:bg-slate-800/60 text-left text-[11px] uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                    <tr>
+                      <th className="px-3 py-2.5 font-semibold">{t('wiWallet.pbMarket')}</th>
+                      <th className="px-3 py-2.5 font-semibold">{t('wiWallet.pbOutcome')}</th>
+                      <th className="px-3 py-2.5 font-semibold">{t('wiWallet.pbSide')}</th>
+                      <th className="px-3 py-2.5 font-semibold">
+                        <button
+                          type="button"
+                          onClick={() => setPbSortFor('sessionStart')}
+                          className="inline-flex items-center gap-0.5 uppercase tracking-wider hover:text-primary"
+                        >
+                          {t('wiWallet.pbStart')}{pbSortIndicator('sessionStart')}
+                        </button>
+                      </th>
+                      <th className="px-3 py-2.5 font-semibold">
+                        <button
+                          type="button"
+                          onClick={() => setPbSortFor('durationMs')}
+                          className="inline-flex items-center gap-0.5 uppercase tracking-wider hover:text-primary"
+                        >
+                          {t('wiWallet.pbDuration')}{pbSortIndicator('durationMs')}
+                        </button>
+                      </th>
+                      <th className="px-3 py-2.5 font-semibold text-right">
+                        <button
+                          type="button"
+                          onClick={() => setPbSortFor('tradeCount')}
+                          className="inline-flex items-center gap-0.5 uppercase tracking-wider hover:text-primary"
+                        >
+                          {t('wiWallet.pbTrades')}{pbSortIndicator('tradeCount')}
+                        </button>
+                      </th>
+                      <th className="px-3 py-2.5 font-semibold text-right">
+                        <button
+                          type="button"
+                          onClick={() => setPbSortFor('totalVolumeUsd')}
+                          className="inline-flex items-center gap-0.5 uppercase tracking-wider hover:text-primary"
+                        >
+                          {t('wiWallet.pbVolumeUsd')}{pbSortIndicator('totalVolumeUsd')}
+                        </button>
+                      </th>
+                      <th className="px-3 py-2.5 font-semibold">
+                        <button
+                          type="button"
+                          onClick={() => setPbSortFor('probabilityDeltaPct')}
+                          className="inline-flex items-center gap-0.5 uppercase tracking-wider hover:text-primary"
+                        >
+                          {t('wiWallet.pbProbability')}{pbSortIndicator('probabilityDeltaPct')}
+                        </button>
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200 dark:divide-slate-800 font-mono tabular-nums text-xs">
+                    {sortedPositionBuilds.map((s, i) => {
+                      const resolvedName = s.outcomeName ?? outcomeNameFor(s.marketConditionId, s.outcomeIndex);
+                      return (
+                        <tr
+                          key={`${s.marketConditionId}-${s.outcomeIndex ?? 'na'}-${s.side}-${s.sessionStart}-${i}`}
+                          className="hover:bg-slate-50 dark:hover:bg-slate-800/40"
+                        >
+                          <td className="px-3 py-2 font-sans truncate max-w-[220px]" title={s.marketSlug}>
+                            {s.marketSlug || s.marketConditionId.slice(0, 14) + '...'}
+                          </td>
+                          <td className="px-3 py-2 font-sans">
+                            {resolvedName ? (
+                              <span>{resolvedName}{s.outcomeIndex != null && <span className="text-slate-400"> ({s.outcomeIndex})</span>}</span>
+                            ) : (
+                              <span className="text-slate-500">{s.outcomeIndex == null ? '—' : `Outcome ${s.outcomeIndex}`}</span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2 font-sans">
+                            <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase ${
+                              s.side === 'BUY'
+                                ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300'
+                                : 'bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-300'
+                            }`}>
+                              {s.side}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2 font-sans">
+                            <RelativeTime iso={s.sessionStart} className="text-slate-600 dark:text-slate-400" />
+                          </td>
+                          <td className="px-3 py-2 font-sans">{formatDuration(s.durationMs)}</td>
+                          <td className="px-3 py-2 text-right">{s.tradeCount}</td>
+                          <td className="px-3 py-2 text-right">{formatUsdShort(s.totalVolumeUsd)}</td>
+                          <td className="px-3 py-2">
+                            <ProbabilityChip
+                              priceStart={s.priceStart}
+                              priceEnd={s.priceEnd}
+                              deltaPct={s.probabilityDeltaPct}
+                              noDataLabel={t('wiWallet.pbDeltaNoData')}
+                            />
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )
         )}

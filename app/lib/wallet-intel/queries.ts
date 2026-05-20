@@ -18,12 +18,14 @@
  */
 
 import { prisma } from '../../../lib/db';
+import { getOutcomesByConditionIds } from './market-metadata';
 
 /** Common time-window constants, exported so the API routes can stay 1:1 with these queries. */
 export const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 export const SEVEN_DAYS_MS = 7 * ONE_DAY_MS;
 export const FOURTEEN_DAYS_MS = 14 * ONE_DAY_MS;
 export const THIRTY_DAYS_MS = 30 * ONE_DAY_MS;
+export const NINETY_DAYS_MS = 90 * ONE_DAY_MS;
 
 const SEVERITY_RANK: Record<string, number> = {
   low: 1,
@@ -117,6 +119,8 @@ export async function getSummary(): Promise<SummaryResponse | { error: string }>
 // ─── /wallet/[addr] ───────────────────────────────────────────────────
 
 export interface WalletDetailResponse {
+  /** Internal UUID of the wallet row — needed by sibling queries that key on walletId. */
+  walletId: string;
   wallet: {
     proxyAddress: string;
     proxyType: string;
@@ -247,6 +251,7 @@ export async function getWalletDetail(
   }));
 
   return {
+    walletId: wallet.id,
     wallet: {
       proxyAddress: wallet.proxyAddress,
       proxyType: wallet.proxyType,
@@ -446,4 +451,277 @@ export async function getMarketWhales(
     .filter((v): v is NonNullable<typeof v> => v !== null);
 
   return { conditionId, whales };
+}
+
+// ─── /wallet/[addr] — position-building sessions ──────────────────────
+
+/**
+ * A "session" is a contiguous run of trades by the same wallet on the
+ * same (market, outcome, side) channel where every adjacent pair is
+ * within `gapMinutes` of each other. Cross-referenced against the
+ * `market.MarketPrice` history so we can show how much the wallet
+ * pushed the implied probability during the session.
+ */
+export interface PositionBuildSession {
+  marketConditionId: string;
+  marketSlug: string;
+  outcomeIndex: number | null;
+  /** Resolved via wallet.market_metadata; null when not yet captured. */
+  outcomeName: string | null;
+  side: 'BUY' | 'SELL';
+  /** First trade timestamp in the session. */
+  sessionStart: Date;
+  /** Last trade timestamp in the session. */
+  sessionEnd: Date;
+  durationMs: number;
+  tradeCount: number;
+  /** Sum of |valueUsd| across every trade in the session. */
+  totalVolumeUsd: number;
+  /** Probability in [0,1] at sessionStart (closest snapshot ≤ start). */
+  priceStart: number | null;
+  /** Probability in [0,1] at sessionEnd (closest snapshot ≥ end, falls back to latest snapshot). */
+  priceEnd: number | null;
+  /** (priceEnd − priceStart) × 100, rounded to 2 decimals. */
+  probabilityDeltaPct: number | null;
+}
+
+interface SessionWorkItem {
+  marketConditionId: string;
+  marketSlug: string;
+  outcomeIndex: number | null;
+  side: 'BUY' | 'SELL';
+  sessionStart: Date;
+  sessionEnd: Date;
+  tradeCount: number;
+  totalVolumeUsd: number;
+}
+
+/**
+ * Group a wallet's trades over the last 90 days into "position-building"
+ * sessions, then cross-reference each session against the market price
+ * timeline to compute the probability delta the wallet *might* have caused.
+ *
+ * Cross-schema bridging (the hard bit):
+ *   walletTrade.marketSlug ─ matches ─→ market.Market.polymarketMarketId
+ *   walletTrade.outcomeIndex ─ via MarketMetadata.outcomesJson[].name ─→
+ *     market.MarketOutcome.outcomeName (case-insensitive)
+ *   → market.MarketPrice rows keyed on (marketId, outcomeId, snapshotAt)
+ *
+ * At every join boundary we accept that data may be missing (no metadata
+ * row yet, no MarketOutcome row, no price snapshots) and degrade to
+ * `priceStart: null, priceEnd: null, probabilityDeltaPct: null` instead of
+ * throwing. The UI surfaces a banner when most sessions lack price data.
+ */
+export async function getWalletPositionBuilds(
+  walletId: string,
+  opts?: { gapMinutes?: number; limit?: number },
+): Promise<PositionBuildSession[]> {
+  if (!prisma) return [];
+
+  const gapMinutes = opts?.gapMinutes ?? 60;
+  const limit = opts?.limit ?? 50;
+  const gapMs = gapMinutes * 60 * 1000;
+  const since = new Date(Date.now() - NINETY_DAYS_MS);
+
+  // 1. Load trades in chronological order.
+  const trades = await prisma.walletTrade.findMany({
+    where: { walletId, tradeTimestamp: { gte: since } },
+    orderBy: { tradeTimestamp: 'asc' },
+    select: {
+      marketConditionId: true,
+      marketSlug: true,
+      outcomeIndex: true,
+      side: true,
+      valueUsd: true,
+      tradeTimestamp: true,
+    },
+  });
+  if (trades.length === 0) return [];
+
+  // 2 + 3. Bucket by (conditionId, outcomeIndex ?? -1, side), then
+  //        segment each bucket into sessions on `gapMs` gaps.
+  const buckets = new Map<string, typeof trades>();
+  for (const tr of trades) {
+    const sideRaw = (tr.side || '').toUpperCase();
+    if (sideRaw !== 'BUY' && sideRaw !== 'SELL') continue;
+    const key = `${tr.marketConditionId}::${tr.outcomeIndex ?? -1}::${sideRaw}`;
+    const arr = buckets.get(key);
+    if (arr) arr.push(tr);
+    else buckets.set(key, [tr]);
+  }
+
+  const sessions: SessionWorkItem[] = [];
+  for (const [key, channelTrades] of buckets) {
+    const [conditionId, outcomeIdxStr, sideStr] = key.split('::');
+    const outcomeIndex = outcomeIdxStr === '-1' ? null : Number(outcomeIdxStr);
+    const side = sideStr as 'BUY' | 'SELL';
+    // First slug we see for this channel is fine — all trades in a bucket
+    // share marketConditionId, and marketSlug is per-market, so the value
+    // is stable within a bucket.
+    const marketSlug = channelTrades[0]?.marketSlug ?? '';
+
+    let current: SessionWorkItem | null = null;
+    let prevTs = 0;
+    for (const tr of channelTrades) {
+      const ts = tr.tradeTimestamp.getTime();
+      const vol = Math.abs(tr.valueUsd);
+      if (current && ts - prevTs <= gapMs) {
+        current.sessionEnd = tr.tradeTimestamp;
+        current.tradeCount += 1;
+        current.totalVolumeUsd += vol;
+      } else {
+        if (current) sessions.push(current);
+        current = {
+          marketConditionId: conditionId,
+          marketSlug,
+          outcomeIndex,
+          side,
+          sessionStart: tr.tradeTimestamp,
+          sessionEnd: tr.tradeTimestamp,
+          tradeCount: 1,
+          totalVolumeUsd: vol,
+        };
+      }
+      prevTs = ts;
+    }
+    if (current) sessions.push(current);
+  }
+
+  if (sessions.length === 0) return [];
+
+  // 4. Sort DESC and slice early — we only do price lookups for the
+  //    `limit` most recent sessions so we avoid blowing up the price
+  //    query count for very active wallets.
+  sessions.sort((a, b) => b.sessionStart.getTime() - a.sessionStart.getTime());
+  const head = sessions.slice(0, limit);
+
+  // 5. Price lookups. Cache per (marketSlug → marketId) and
+  //    (marketId, outcomeNameLower → outcomeId) so repeat sessions on
+  //    the same market+outcome only hit the DB once.
+
+  // 5a. Distinct slugs → market rows.
+  const slugs = Array.from(new Set(head.map((s) => s.marketSlug).filter(Boolean)));
+  const marketByslug = new Map<string, { id: string }>();
+  if (slugs.length > 0) {
+    try {
+      const marketRows = await prisma.market.findMany({
+        where: { polymarketMarketId: { in: slugs } },
+        select: { id: true, polymarketMarketId: true },
+      });
+      for (const m of marketRows) {
+        marketByslug.set(m.polymarketMarketId, { id: m.id });
+      }
+    } catch {
+      // Cross-schema query failed (e.g. market schema unavailable); we'll
+      // just return sessions with null prices.
+    }
+  }
+
+  // 5b. Distinct conditionIds → outcomeName lookup (via MarketMetadata).
+  const conditionIds = Array.from(new Set(head.map((s) => s.marketConditionId)));
+  const outcomesByCondition = await getOutcomesByConditionIds(conditionIds);
+
+  // 5c. Resolve a MarketOutcome row per (marketId, outcomeNameLower).
+  const outcomeRowCache = new Map<string, { id: string } | null>();
+  async function resolveOutcomeId(
+    marketId: string,
+    outcomeName: string,
+  ): Promise<string | null> {
+    const cacheKey = `${marketId}::${outcomeName.toLowerCase()}`;
+    if (outcomeRowCache.has(cacheKey)) {
+      return outcomeRowCache.get(cacheKey)?.id ?? null;
+    }
+    try {
+      const row = await prisma!.marketOutcome.findFirst({
+        where: {
+          marketId,
+          outcomeName: { equals: outcomeName, mode: 'insensitive' },
+        },
+        select: { id: true },
+      });
+      outcomeRowCache.set(cacheKey, row);
+      return row?.id ?? null;
+    } catch {
+      outcomeRowCache.set(cacheKey, null);
+      return null;
+    }
+  }
+
+  // 5d–f. Compute the per-session price window in parallel. Each block
+  //       hits at worst 2 MarketPrice queries (start + end) — and we
+  //       fall through to nulls if any lookup fails.
+  const enriched = await Promise.all(
+    head.map(async (s): Promise<PositionBuildSession> => {
+      const outcomes = outcomesByCondition.get(s.marketConditionId) ?? [];
+      const outcomeName =
+        s.outcomeIndex == null
+          ? null
+          : outcomes.find((o) => o.index === s.outcomeIndex)?.name ?? null;
+
+      const base: PositionBuildSession = {
+        marketConditionId: s.marketConditionId,
+        marketSlug: s.marketSlug,
+        outcomeIndex: s.outcomeIndex,
+        outcomeName,
+        side: s.side,
+        sessionStart: s.sessionStart,
+        sessionEnd: s.sessionEnd,
+        durationMs: s.sessionEnd.getTime() - s.sessionStart.getTime(),
+        tradeCount: s.tradeCount,
+        totalVolumeUsd: s.totalVolumeUsd,
+        priceStart: null,
+        priceEnd: null,
+        probabilityDeltaPct: null,
+      };
+
+      const market = marketByslug.get(s.marketSlug);
+      if (!market || !outcomeName) return base;
+
+      const outcomeId = await resolveOutcomeId(market.id, outcomeName);
+      if (!outcomeId) return base;
+
+      try {
+        const [startSnap, endSnap, latestSnap] = await Promise.all([
+          prisma!.marketPrice.findFirst({
+            where: { outcomeId, snapshotAt: { lte: s.sessionStart } },
+            orderBy: { snapshotAt: 'desc' },
+            select: { price: true },
+          }),
+          prisma!.marketPrice.findFirst({
+            where: { outcomeId, snapshotAt: { gte: s.sessionEnd } },
+            orderBy: { snapshotAt: 'asc' },
+            select: { price: true },
+          }),
+          // Fallback for when no snapshot exists at-or-after sessionEnd
+          // (e.g. session ended within the last cron interval): use the
+          // most recent snapshot we do have.
+          prisma!.marketPrice.findFirst({
+            where: { outcomeId },
+            orderBy: { snapshotAt: 'desc' },
+            select: { price: true },
+          }),
+        ]);
+
+        const priceStart = startSnap?.price ?? null;
+        const priceEnd = endSnap?.price ?? latestSnap?.price ?? null;
+
+        if (priceStart == null || priceEnd == null) {
+          return { ...base, priceStart, priceEnd, probabilityDeltaPct: null };
+        }
+
+        const deltaPct = Math.round((priceEnd - priceStart) * 100 * 100) / 100;
+        return {
+          ...base,
+          priceStart,
+          priceEnd,
+          probabilityDeltaPct: deltaPct,
+        };
+      } catch {
+        // Cross-schema MarketPrice query failed — degrade gracefully.
+        return base;
+      }
+    }),
+  );
+
+  return enriched;
 }

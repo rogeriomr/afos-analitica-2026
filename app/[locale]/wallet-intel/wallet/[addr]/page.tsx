@@ -1,11 +1,20 @@
 import Link from 'next/link';
 import { getMessages } from '../../../../../lib/i18n/get-messages';
 import { isValidLocale, type Locale } from '../../../../../lib/i18n/config';
-import { getWalletDetail } from '../../../../lib/wallet-intel/queries';
+import {
+  getWalletDetail,
+  getWalletPositionBuilds,
+  type PositionBuildSession,
+} from '../../../../lib/wallet-intel/queries';
+import { getOutcomesByConditionIds } from '../../../../lib/wallet-intel/market-metadata';
 import { WalletAddress } from '../../../../components/wallet-intel/WalletAddress';
 import { ScoreGauge } from '../../../../components/wallet-intel/ScoreGauge';
 import { RelativeTime } from '../../../../components/wallet-intel/RelativeTime';
-import { WalletDetailTabs } from '../../../../components/wallet-intel/WalletDetailTabs';
+import {
+  WalletDetailTabs,
+  type OutcomesByCondition,
+  type SerializablePositionBuildSession,
+} from '../../../../components/wallet-intel/WalletDetailTabs';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -71,7 +80,45 @@ export default async function WalletDetailPage({ params }: PageProps) {
     );
   }
 
-  const { wallet, profile, positions, trades, flags, score } = detail;
+  const { walletId, wallet, profile, positions, trades, flags, score } = detail;
+
+  // Sibling lookups: position-building sessions + a conditionId → (index → name)
+  // outcome map so the Trades tab can show human-readable outcome names.
+  // Both are best-effort; failures degrade to empty data, never throw.
+  const positionBuildsRaw = await getWalletPositionBuilds(walletId).catch(() => [] as PositionBuildSession[]);
+  const conditionIds = Array.from(
+    new Set<string>([
+      ...positions.map((p) => p.marketConditionId),
+      ...trades.map((t) => t.marketConditionId),
+      ...positionBuildsRaw.map((s) => s.marketConditionId),
+    ]),
+  );
+  const outcomesMap = await getOutcomesByConditionIds(conditionIds).catch(
+    () => new Map<string, Array<{ index: number; name: string }>>(),
+  );
+  const outcomesByConditionId: OutcomesByCondition = {};
+  for (const [cid, outcomes] of outcomesMap) {
+    const inner: Record<string, string> = {};
+    for (const o of outcomes) inner[String(o.index)] = o.name;
+    outcomesByConditionId[cid] = inner;
+  }
+  // Serialize Dates → ISO so we can pass through a Server→Client boundary
+  // (Next 15 only allows JSON-serializable props to client components).
+  const positionBuilds: SerializablePositionBuildSession[] = positionBuildsRaw.map((s) => ({
+    marketConditionId: s.marketConditionId,
+    marketSlug: s.marketSlug,
+    outcomeIndex: s.outcomeIndex,
+    outcomeName: s.outcomeName,
+    side: s.side,
+    sessionStart: s.sessionStart.toISOString(),
+    sessionEnd: s.sessionEnd.toISOString(),
+    durationMs: s.durationMs,
+    tradeCount: s.tradeCount,
+    totalVolumeUsd: s.totalVolumeUsd,
+    priceStart: s.priceStart,
+    priceEnd: s.priceEnd,
+    probabilityDeltaPct: s.probabilityDeltaPct,
+  }));
 
   return (
     <div className="space-y-5">
@@ -174,7 +221,14 @@ export default async function WalletDetailPage({ params }: PageProps) {
         </div>
       </header>
 
-      <WalletDetailTabs flags={flags} positions={positions} trades={trades} profile={profile} />
+      <WalletDetailTabs
+        flags={flags}
+        positions={positions}
+        trades={trades}
+        profile={profile}
+        positionBuilds={positionBuilds}
+        outcomesByConditionId={outcomesByConditionId}
+      />
     </div>
   );
 }
