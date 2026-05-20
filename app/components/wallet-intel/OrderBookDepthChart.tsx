@@ -124,6 +124,11 @@ interface HoverState {
   ask: EnrichedLevel | null;
   // Closest bid level at price <= hoverPrice. null analogously.
   bid: EnrichedLevel | null;
+  // Floating popup position — pixel coords RELATIVE to the chart container.
+  popupX: number;
+  popupY: number;
+  /** True when the hover is to the RIGHT of the midpoint (in ask territory) */
+  isAbove: boolean;
 }
 
 interface OutcomeChartProps {
@@ -147,13 +152,22 @@ interface OutcomeChartProps {
     midLegend: string;
     priceAxis: string;
     cumAxis: string;
-    detailPrice: string;
-    detailAskTick: string;
-    detailAskCum: string;
-    detailBidTick: string;
-    detailBidCum: string;
-    yesEquiv: string;
-    noEquiv: string;
+    /** Inline arrow label rendered to the LEFT of midpoint on chart */
+    leftLabel: string;
+    /** Inline arrow label rendered to the RIGHT of midpoint on chart */
+    rightLabel: string;
+    /** Floating popup copy — taught for non-quant audiences */
+    popupYesPrice: string;
+    popupNoEquivPrefix: string;
+    popupActionUp: string;
+    popupActionDown: string;
+    popupBuyYes: string;
+    popupSellYes: string;
+    popupBuyNo: string;
+    popupSellNo: string;
+    popupEquivalentSep: string;
+    popupNoLiquidity: string;
+    popupTickDepth: string;
   };
 }
 
@@ -252,7 +266,15 @@ function OutcomeChart({
         break;
       }
     }
-    onHover({ outcome, hoverPrice: price, ask, bid });
+    // Popup positioning: capture cursor in CONTAINER-relative px so we can
+    // absolute-position the popup next to it. Bias popup direction based on
+    // which half of the chart we're in so it doesn't fall off the edge.
+    const containerEl = svg.parentElement;
+    const containerRect = containerEl?.getBoundingClientRect() ?? rect;
+    const popupX = e.clientX - containerRect.left;
+    const popupY = e.clientY - containerRect.top;
+    const isAbove = mid != null ? price >= mid : price >= 0.5;
+    onHover({ outcome, hoverPrice: price, ask, bid, popupX, popupY, isAbove });
   }
   function handlePointerLeave() {
     onHover(null);
@@ -338,8 +360,112 @@ function OutcomeChart({
         </span>
       </div>
 
-      {/* SVG chart */}
+      {/* SVG chart — `relative` so the floating popup positions against this container */}
       <div className="relative bg-slate-50 dark:bg-slate-950/30">
+        {/* Floating popup on hover — positions next to the cursor with a bias
+            so it never spills off the chart edge. Plain-language summary of
+            what would happen if you traded YES (or equivalently NO) at this
+            price level. */}
+        {myHover && (
+          <div
+            className="pointer-events-none absolute z-10 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-lg px-3 py-2.5 text-[11px] max-w-[280px]"
+            style={{
+              // Bias: place popup to LEFT of cursor when hover is on right half,
+              // RIGHT of cursor when on left half. Vertical: offset 12px up.
+              left: myHover.isAbove ? Math.max(8, myHover.popupX - 290) : Math.min(myHover.popupX + 14, VIEW.width - 290),
+              top: Math.max(8, myHover.popupY - 110),
+            }}
+          >
+            <div className="font-semibold text-slate-900 dark:text-slate-100 mb-1 font-mono tabular-nums flex items-baseline gap-2">
+              <span className="text-primary text-sm">{formatPct(myHover.hoverPrice)}</span>
+              <span className="text-[10px] text-slate-500">{labels.popupYesPrice}</span>
+            </div>
+            <div className="text-[10px] text-slate-500 dark:text-slate-400 mb-2 font-mono tabular-nums">
+              {labels.popupNoEquivPrefix}{' '}
+              <span className="text-slate-700 dark:text-slate-300 font-semibold">
+                {formatPct(1 - myHover.hoverPrice)}
+              </span>
+            </div>
+
+            {/* Plain-language action box */}
+            <div
+              className={`rounded-md px-2 py-1.5 mb-2 ${
+                myHover.isAbove
+                  ? 'bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900'
+                  : 'bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-900'
+              }`}
+            >
+              <div
+                className={`text-[10px] uppercase tracking-wider font-bold mb-1 ${
+                  myHover.isAbove
+                    ? 'text-red-700 dark:text-red-400'
+                    : 'text-emerald-700 dark:text-emerald-400'
+                }`}
+              >
+                {myHover.isAbove ? labels.popupActionUp : labels.popupActionDown}
+              </div>
+              <div className="space-y-0.5 leading-snug">
+                {myHover.isAbove && myHover.ask && (
+                  <>
+                    <div className="text-slate-700 dark:text-slate-300">
+                      • {labels.popupBuyYes}{' '}
+                      <span className="font-bold text-slate-900 dark:text-slate-100 font-mono tabular-nums">
+                        {formatUsd(myHover.ask.cumUsd)}
+                      </span>
+                    </div>
+                    <div className="text-slate-500 dark:text-slate-500 text-[10px] pl-2 italic">
+                      {labels.popupEquivalentSep}
+                    </div>
+                    <div className="text-slate-700 dark:text-slate-300">
+                      • {labels.popupSellNo}{' '}
+                      <span className="font-bold text-slate-900 dark:text-slate-100 font-mono tabular-nums">
+                        {formatUsd(myHover.ask.cumUsd)}
+                      </span>
+                    </div>
+                  </>
+                )}
+                {!myHover.isAbove && myHover.bid && (
+                  <>
+                    <div className="text-slate-700 dark:text-slate-300">
+                      • {labels.popupSellYes}{' '}
+                      <span className="font-bold text-slate-900 dark:text-slate-100 font-mono tabular-nums">
+                        {formatUsd(myHover.bid.cumUsd)}
+                      </span>
+                    </div>
+                    <div className="text-slate-500 dark:text-slate-500 text-[10px] pl-2 italic">
+                      {labels.popupEquivalentSep}
+                    </div>
+                    <div className="text-slate-700 dark:text-slate-300">
+                      • {labels.popupBuyNo}{' '}
+                      <span className="font-bold text-slate-900 dark:text-slate-100 font-mono tabular-nums">
+                        {formatUsd(myHover.bid.cumUsd)}
+                      </span>
+                    </div>
+                  </>
+                )}
+                {((myHover.isAbove && !myHover.ask) || (!myHover.isAbove && !myHover.bid)) && (
+                  <div className="text-slate-500 italic">{labels.popupNoLiquidity}</div>
+                )}
+              </div>
+            </div>
+
+            {/* Tick depth at exactly this level */}
+            <div className="text-[10px] text-slate-500 dark:text-slate-500 border-t border-slate-200 dark:border-slate-800 pt-1.5">
+              <div>
+                <span>{labels.popupTickDepth}: </span>
+                <span className="font-semibold text-slate-700 dark:text-slate-300 font-mono tabular-nums">
+                  {myHover.isAbove
+                    ? myHover.ask
+                      ? formatUsd(myHover.ask.tickUsd)
+                      : '—'
+                    : myHover.bid
+                      ? formatUsd(myHover.bid.tickUsd)
+                      : '—'}
+                </span>
+              </div>
+            </div>
+          </div>
+        )}
         <svg
           viewBox={`0 0 ${VIEW.width} ${VIEW.height}`}
           preserveAspectRatio="none"
@@ -436,10 +562,33 @@ function OutcomeChart({
                 y={VIEW.paddingTop - 4}
                 textAnchor="middle"
                 className="fill-slate-700 dark:fill-slate-300"
-                fontSize={9}
+                fontSize={10}
+                fontWeight="bold"
                 fontFamily="ui-monospace, monospace"
               >
-                mid {formatPrice(mid)}
+                ↕ preço atual: {formatPct(mid)}
+              </text>
+
+              {/* Directional inline labels — left of mid + right of mid */}
+              <text
+                x={xOf(mid) - 8}
+                y={VIEW.paddingTop + 14}
+                textAnchor="end"
+                className="fill-emerald-700 dark:fill-emerald-400"
+                fontSize={10}
+                fontWeight="600"
+              >
+                {labels.leftLabel} ←
+              </text>
+              <text
+                x={xOf(mid) + 8}
+                y={VIEW.paddingTop + 14}
+                textAnchor="start"
+                className="fill-red-700 dark:fill-red-400"
+                fontSize={10}
+                fontWeight="600"
+              >
+                → {labels.rightLabel}
               </text>
             </>
           )}
@@ -519,52 +668,9 @@ function OutcomeChart({
         </svg>
       </div>
 
-      {/* Hover detail strip */}
-      <div className="px-4 py-2.5 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/50 min-h-[68px] text-[11px]">
-        {myHover ? (
-          <div className="space-y-1">
-            <div className="font-semibold text-slate-900 dark:text-slate-100 font-mono tabular-nums">
-              {labels.detailPrice}{' '}
-              <span className="text-primary">
-                {formatPct(myHover.hoverPrice)} ({formatPrice(myHover.hoverPrice)})
-              </span>
-              <span className="text-slate-500 ml-3">
-                {outcome === 'yes' ? labels.yesEquiv : labels.noEquiv}{' '}
-                <span className="text-slate-700 dark:text-slate-300">
-                  {formatPct(1 - myHover.hoverPrice)} ({formatPrice(1 - myHover.hoverPrice)})
-                </span>
-              </span>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-0.5 font-mono tabular-nums">
-              {/* Right side: asks */}
-              <div>
-                <span className="text-red-700 dark:text-red-400">{labels.detailAskTick}: </span>
-                <span className="font-semibold">
-                  {myHover.ask ? formatUsd(myHover.ask.tickUsd) : '—'}
-                </span>
-                <span className="text-slate-500"> · {labels.detailAskCum}: </span>
-                <span className="font-semibold">
-                  {myHover.ask ? formatUsd(myHover.ask.cumUsd) : '—'}
-                </span>
-              </div>
-              {/* Left side: bids */}
-              <div>
-                <span className="text-emerald-700 dark:text-emerald-400">
-                  {labels.detailBidTick}:{' '}
-                </span>
-                <span className="font-semibold">
-                  {myHover.bid ? formatUsd(myHover.bid.tickUsd) : '—'}
-                </span>
-                <span className="text-slate-500"> · {labels.detailBidCum}: </span>
-                <span className="font-semibold">
-                  {myHover.bid ? formatUsd(myHover.bid.cumUsd) : '—'}
-                </span>
-              </div>
-            </div>
-          </div>
-        ) : (
-          <p className="text-slate-400 dark:text-slate-600">{labels.hoverHint}</p>
-        )}
+      {/* Idle hint below chart — popup takes over on hover */}
+      <div className="px-4 py-2 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/50 text-[10px] text-slate-500 dark:text-slate-500">
+        {labels.hoverHint}
       </div>
     </div>
   );
@@ -605,13 +711,19 @@ export function OrderBookDepthChart({ yesBook, noBook, marketQuestion }: Props) 
     midLegend: t('wiMarket.obMidLegend'),
     priceAxis: t('wiMarket.obPriceAxis'),
     cumAxis: t('wiMarket.obCumAxis'),
-    detailPrice: t('wiMarket.obDetailPrice'),
-    detailAskTick: t('wiMarket.obDetailAskTick'),
-    detailAskCum: t('wiMarket.obDetailAskCum'),
-    detailBidTick: t('wiMarket.obDetailBidTick'),
-    detailBidCum: t('wiMarket.obDetailBidCum'),
-    yesEquiv: t('wiMarket.obYesEquiv'),
-    noEquiv: t('wiMarket.obNoEquiv'),
+    leftLabel: t('wiMarket.obLeftLabel'),
+    rightLabel: t('wiMarket.obRightLabel'),
+    popupYesPrice: t('wiMarket.obPopupYesPrice'),
+    popupNoEquivPrefix: t('wiMarket.obPopupNoEquivPrefix'),
+    popupActionUp: t('wiMarket.obPopupActionUp'),
+    popupActionDown: t('wiMarket.obPopupActionDown'),
+    popupBuyYes: t('wiMarket.obPopupBuyYes'),
+    popupSellYes: t('wiMarket.obPopupSellYes'),
+    popupBuyNo: t('wiMarket.obPopupBuyNo'),
+    popupSellNo: t('wiMarket.obPopupSellNo'),
+    popupEquivalentSep: t('wiMarket.obPopupEquivSep'),
+    popupNoLiquidity: t('wiMarket.obPopupNoLiquidity'),
+    popupTickDepth: t('wiMarket.obPopupTickDepth'),
   };
 
   return (

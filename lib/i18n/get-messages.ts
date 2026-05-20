@@ -35,10 +35,12 @@ async function loadNamespace(locale: Locale, ns: string): Promise<Record<string,
 
 /**
  * Carrega e mergea todos os namespaces para um locale.
- * Resultado cacheado em memória.
+ * Resultado cacheado em memória APENAS em produção — em dev, recarregamos a cada
+ * chamada para que mudanças em `messages/*.json` apareçam sem reiniciar o servidor.
  */
 export async function getMessages(locale: Locale): Promise<Messages> {
-  if (cache.has(locale)) return cache.get(locale)!;
+  const isProd = process.env.NODE_ENV === 'production';
+  if (isProd && cache.has(locale)) return cache.get(locale)!;
 
   const parts = await Promise.all(
     NAMESPACES.map(ns => loadNamespace(locale, ns))
@@ -55,6 +57,6 @@ export async function getMessages(locale: Locale): Promise<Messages> {
     console.error(`[i18n] Nenhuma mensagem carregada para locale: ${locale}`);
   }
 
-  cache.set(locale, merged);
+  if (isProd) cache.set(locale, merged);
   return merged;
 }
