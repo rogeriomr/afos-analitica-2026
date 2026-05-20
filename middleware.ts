@@ -5,6 +5,18 @@ import { defaultLocale, COOKIE_NAME, isValidLocale, normalizeLocale, locales } f
 const VISITOR_COOKIE_NAME = 'afos_visitor_id';
 const VISITOR_COOKIE_MAX_AGE = 365 * 24 * 60 * 60;
 
+function timingSafeStringEqual(a: string, b: string): boolean {
+  // Note: length difference is technically observable here (early return),
+  // but length is also observable from the base64 header anyway. The byte-loop
+  // ensures the per-character compare is constant-time.
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) {
+    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return diff === 0;
+}
+
 function ensureVisitorCookie(request: NextRequest, response: NextResponse): NextResponse {
   if (!request.cookies.get(VISITOR_COOKIE_NAME)) {
     response.cookies.set(VISITOR_COOKIE_NAME, crypto.randomUUID(), {
@@ -49,7 +61,42 @@ function checkStrategicDocAuth(request: NextRequest): NextResponse | null {
   } catch {
     return basicAuthChallenge();
   }
-  if (provided !== password) return basicAuthChallenge();
+  if (!timingSafeStringEqual(provided, password)) return basicAuthChallenge();
+  return null;
+}
+
+function isWalletIntelPath(pathname: string): boolean {
+  return pathname.startsWith('/api/wallet-intel/') ||
+    /^\/(?:pt-BR|en|es)\/wallet-intel(?:\/|$)/.test(pathname);
+}
+
+function walletIntelAuthChallenge(): NextResponse {
+  return new NextResponse('Authentication required', {
+    status: 401,
+    headers: {
+      'WWW-Authenticate': 'Basic realm="AFOS Wallet Intelligence - Admin Only"',
+      'Cache-Control': 'no-store',
+    },
+  });
+}
+
+function checkWalletIntelAuth(request: NextRequest): NextResponse | null {
+  const password = process.env.WALLET_INTEL_PASSWORD;
+  if (!password) {
+    // Fail closed — sem env var, ninguém entra (admin-only dashboard).
+    return new NextResponse('Service unavailable', { status: 503 });
+  }
+  const auth = request.headers.get('authorization');
+  if (!auth || !auth.startsWith('Basic ')) return walletIntelAuthChallenge();
+  let provided = '';
+  try {
+    const decoded = atob(auth.slice(6));
+    const idx = decoded.indexOf(':');
+    provided = idx >= 0 ? decoded.slice(idx + 1) : decoded;
+  } catch {
+    return walletIntelAuthChallenge();
+  }
+  if (!timingSafeStringEqual(provided, password)) return walletIntelAuthChallenge();
   return null;
 }
 
@@ -102,6 +149,13 @@ function shouldSkip(pathname: string): boolean {
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
+
+  if (isWalletIntelPath(pathname)) {
+    const denied = checkWalletIntelAuth(request);
+    if (denied) return denied;
+    // Auth ok — fall through to existing flow so /api/wallet-intel/* gets
+    // rate-limit + security headers, and HTML pages get locale routing + visitor cookie.
+  }
 
   if (STRATEGIC_DOCS.has(pathname)) {
     const denied = checkStrategicDocAuth(request);
