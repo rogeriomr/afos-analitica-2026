@@ -71,3 +71,4 @@ public/preview-daily-viz.html
 # Defensive ignores (proteção redundante — paths movidos pra C:\AFOS-Privado\)
 launch-day-13mai.md
 docs/launch-texts/0*.md
+.vercel-secrets-DO-NOT-COMMIT.txt
