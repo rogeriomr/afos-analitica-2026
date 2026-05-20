@@ -22,6 +22,7 @@ export function SubNav() {
     { href: `${base}/markets`, label: t('wiNav.markets') },
     { href: `${base}/leaderboard`, label: t('wiNav.leaderboard') },
     { href: `${base}/detection`, label: t('wiNav.detection') },
+    { href: `${base}/anti-manipulation`, label: t('wiNav.antiManipulation') },
   ];
 
   // For the markets subtree, the dynamic /market/[conditionId] page should
