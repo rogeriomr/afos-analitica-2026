@@ -12,6 +12,7 @@ import { WalletAddress } from '../../../../components/wallet-intel/WalletAddress
 import { ConcentrationMeter } from '../../../../components/wallet-intel/ConcentrationMeter';
 import { RelativeTime } from '../../../../components/wallet-intel/RelativeTime';
 import { WhalesPanel } from '../../../../components/wallet-intel/WhalesPanel';
+import { OrderBookDepthChart } from '../../../../components/wallet-intel/OrderBookDepthChart';
 import {
   LiquidityImpactCard,
   type LiquidityImpactData,
@@ -416,6 +417,18 @@ export default async function MarketDetailPage({ params }: PageProps) {
           fetchOrderbookImpact() for the failure modes. */}
       {orderbookImpact && orderbookImpact.yesBook && (
         <LiquidityImpactCard data={orderbookImpact} />
+      )}
+
+      {/* Liquidity "tab" — full CLOB depth chart with per-tick hover
+          showing capital + cumulative. Visual prominence via a badge
+          + bold section header makes this feel like a dedicated view
+          rather than another card. */}
+      {orderbookImpact && (orderbookImpact.yesBook || orderbookImpact.noBook) && (
+        <OrderBookDepthChart
+          yesBook={orderbookImpact.yesBook}
+          noBook={orderbookImpact.noBook}
+          marketQuestion={marketQuestion}
+        />
       )}
 
       <WhalesPanel

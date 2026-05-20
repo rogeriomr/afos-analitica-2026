@@ -43,6 +43,13 @@ export interface NormalizedBookLite {
   bestAsk: number | null;
   tickSize: number;
   minOrderSize: number;
+  // Full L2 — present in the API response, declared here so downstream
+  // components (OrderBookDepthChart) can consume the same payload without
+  // a second API call. Optional so older mocks/test fixtures still type-check.
+  tokenId?: string;
+  bids?: Array<{ price: number; size: number }>;
+  asks?: Array<{ price: number; size: number }>;
+  fetchedAt?: Date | string;
 }
 
 export interface LiquidityImpactData {
