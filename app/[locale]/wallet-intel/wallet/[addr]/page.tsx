@@ -6,7 +6,10 @@ import {
   getWalletPositionBuilds,
   type PositionBuildSession,
 } from '../../../../lib/wallet-intel/queries';
-import { getOutcomesByConditionIds } from '../../../../lib/wallet-intel/market-metadata';
+import {
+  getOutcomesByConditionIds,
+  getQuestionsByConditionIds,
+} from '../../../../lib/wallet-intel/market-metadata';
 import { WalletAddress } from '../../../../components/wallet-intel/WalletAddress';
 import { ScoreGauge } from '../../../../components/wallet-intel/ScoreGauge';
 import { RelativeTime } from '../../../../components/wallet-intel/RelativeTime';
@@ -93,15 +96,20 @@ export default async function WalletDetailPage({ params }: PageProps) {
       ...positionBuildsRaw.map((s) => s.marketConditionId),
     ]),
   );
-  const outcomesMap = await getOutcomesByConditionIds(conditionIds).catch(
-    () => new Map<string, Array<{ index: number; name: string }>>(),
-  );
+  const [outcomesMap, questionsMap] = await Promise.all([
+    getOutcomesByConditionIds(conditionIds).catch(
+      () => new Map<string, Array<{ index: number; name: string }>>(),
+    ),
+    getQuestionsByConditionIds(conditionIds).catch(() => new Map<string, string>()),
+  ]);
   const outcomesByConditionId: OutcomesByCondition = {};
   for (const [cid, outcomes] of outcomesMap) {
     const inner: Record<string, string> = {};
     for (const o of outcomes) inner[String(o.index)] = o.name;
     outcomesByConditionId[cid] = inner;
   }
+  const questionsByConditionId: Record<string, string> = {};
+  for (const [cid, q] of questionsMap) questionsByConditionId[cid] = q;
   // Serialize Dates → ISO so we can pass through a Server→Client boundary
   // (Next 15 only allows JSON-serializable props to client components).
   const positionBuilds: SerializablePositionBuildSession[] = positionBuildsRaw.map((s) => ({
@@ -228,6 +236,7 @@ export default async function WalletDetailPage({ params }: PageProps) {
         profile={profile}
         positionBuilds={positionBuilds}
         outcomesByConditionId={outcomesByConditionId}
+        questionsByConditionId={questionsByConditionId}
       />
     </div>
   );

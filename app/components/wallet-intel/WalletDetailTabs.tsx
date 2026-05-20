@@ -77,6 +77,9 @@ export interface SerializablePositionBuildSession {
 /** Plain-object map (conditionId → { outcomeIndex string → outcomeName }). */
 export type OutcomesByCondition = Record<string, Record<string, string>>;
 
+/** Plain-object map (conditionId → market question). */
+export type QuestionsByCondition = Record<string, string>;
+
 interface Props {
   flags: Flag[];
   positions: Position[];
@@ -84,6 +87,7 @@ interface Props {
   profile: Profile | null;
   positionBuilds: SerializablePositionBuildSession[];
   outcomesByConditionId: OutcomesByCondition;
+  questionsByConditionId: QuestionsByCondition;
 }
 
 type TabKey = 'flags' | 'positions' | 'trades' | 'profile' | 'positionBuilds';
@@ -101,6 +105,34 @@ function formatUsdShort(n: number): string {
   if (abs >= 1_000_000) return `$${(n / 1_000_000).toFixed(abs >= 10_000_000 ? 1 : 2)}M`;
   if (abs >= 1_000) return `$${(n / 1_000).toFixed(abs >= 10_000 ? 1 : 2)}k`;
   return `$${n.toFixed(0)}`;
+}
+
+/**
+ * Best label for a market cell — prefers the candidate name extracted from
+ * the question ("Will Lula win..." → "Lula"), falls back to the full question
+ * truncated, then the event slug, then a truncated conditionId. Returns the
+ * label PLUS a longer title-attribute string for tooltips.
+ */
+function marketLabel(
+  conditionId: string,
+  marketSlug: string | null | undefined,
+  questions: QuestionsByCondition,
+): { display: string; title: string } {
+  const question = questions[conditionId];
+  if (question) {
+    // Inline regex (we don't want to import server-only modules here).
+    const m = question.match(/^Will\s+(.+?)\s+(?:win|finish|be|hit|reach)\b/i);
+    const candidate = m && m[1] && m[1].length <= 80 ? m[1].trim() : null;
+    if (candidate) return { display: candidate, title: question };
+    // Question exists but doesn't match candidate pattern — show the
+    // question itself (truncated for the table cell).
+    return {
+      display: question.length > 60 ? question.slice(0, 57) + '...' : question,
+      title: question,
+    };
+  }
+  if (marketSlug) return { display: marketSlug, title: marketSlug };
+  return { display: conditionId.slice(0, 14) + '...', title: conditionId };
 }
 
 function formatDuration(ms: number): string {
@@ -164,9 +196,11 @@ function ProbabilityChip({
  */
 function PositionsTable({
   positions,
+  questions,
   t,
 }: {
   positions: Position[];
+  questions: QuestionsByCondition;
   t: (key: string) => string;
 }) {
   return (
@@ -185,9 +219,11 @@ function PositionsTable({
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-200 dark:divide-slate-800 font-mono tabular-nums text-xs">
-          {positions.map((p, i) => (
+          {positions.map((p, i) => {
+            const lbl = marketLabel(p.marketConditionId, p.marketSlug, questions);
+            return (
             <tr key={`${p.marketConditionId}-${p.outcomeIndex}-${i}`} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
-              <td className="px-3 py-2 truncate max-w-[260px] font-sans" title={p.marketSlug}>{p.marketSlug || p.marketConditionId.slice(0, 14) + '...'}</td>
+              <td className="px-3 py-2 truncate max-w-[260px] font-sans" title={lbl.title}>{lbl.display}</td>
               <td className="px-3 py-2 font-sans">{p.outcomeName} <span className="text-slate-400">({p.outcomeIndex})</span></td>
               <td className="px-3 py-2 text-right">{p.size.toFixed(2)}</td>
               <td className="px-3 py-2 text-right">{p.avgPrice.toFixed(3)}</td>
@@ -196,7 +232,7 @@ function PositionsTable({
               <td className={`px-3 py-2 text-right ${pnlClass(p.pnlUsd)}`}>{p.pnlPercent == null ? '—' : `${p.pnlPercent.toFixed(1)}%`}</td>
               <td className="px-3 py-2 font-sans text-slate-500">{p.snapshotDate.slice(0, 10)}</td>
             </tr>
-          ))}
+          );})}
         </tbody>
       </table>
     </div>
@@ -210,6 +246,7 @@ export function WalletDetailTabs({
   profile,
   positionBuilds,
   outcomesByConditionId,
+  questionsByConditionId,
 }: Props) {
   const { t } = useTranslation();
   const [tab, setTab] = useState<TabKey>(flags.length > 0 ? 'flags' : 'positions');
@@ -343,7 +380,7 @@ export function WalletDetailTabs({
                       {afosPositions.length}
                     </span>
                   </header>
-                  <PositionsTable positions={afosPositions} t={t} />
+                  <PositionsTable positions={afosPositions} questions={questionsByConditionId} t={t} />
                 </section>
               )}
               {otherPositions.length > 0 && (
@@ -356,7 +393,7 @@ export function WalletDetailTabs({
                       {otherPositions.length}
                     </span>
                   </header>
-                  <PositionsTable positions={otherPositions} t={t} />
+                  <PositionsTable positions={otherPositions} questions={questionsByConditionId} t={t} />
                 </section>
               )}
             </div>
@@ -384,10 +421,11 @@ export function WalletDetailTabs({
                 <tbody className="divide-y divide-slate-200 dark:divide-slate-800 font-mono tabular-nums text-xs">
                   {trades.map((tr, i) => {
                     const resolvedName = outcomeNameFor(tr.marketConditionId, tr.outcomeIndex);
+                    const lbl = marketLabel(tr.marketConditionId, tr.marketSlug, questionsByConditionId);
                     return (
                       <tr key={`${tr.transactionHash}-${i}`} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
                         <td className="px-3 py-2 font-sans"><RelativeTime iso={tr.tradeTimestamp} className="text-slate-600 dark:text-slate-400" /></td>
-                        <td className="px-3 py-2 font-sans truncate max-w-[220px]" title={tr.marketSlug}>{tr.marketSlug || tr.marketConditionId.slice(0, 14) + '...'}</td>
+                        <td className="px-3 py-2 font-sans truncate max-w-[220px]" title={lbl.title}>{lbl.display}</td>
                         <td className="px-3 py-2 font-sans">
                           {resolvedName ? (
                             <span>{resolvedName}{tr.outcomeIndex != null && <span className="text-slate-400"> ({tr.outcomeIndex})</span>}</span>
@@ -492,13 +530,14 @@ export function WalletDetailTabs({
                   <tbody className="divide-y divide-slate-200 dark:divide-slate-800 font-mono tabular-nums text-xs">
                     {sortedPositionBuilds.map((s, i) => {
                       const resolvedName = s.outcomeName ?? outcomeNameFor(s.marketConditionId, s.outcomeIndex);
+                      const lbl = marketLabel(s.marketConditionId, s.marketSlug, questionsByConditionId);
                       return (
                         <tr
                           key={`${s.marketConditionId}-${s.outcomeIndex ?? 'na'}-${s.side}-${s.sessionStart}-${i}`}
                           className="hover:bg-slate-50 dark:hover:bg-slate-800/40"
                         >
-                          <td className="px-3 py-2 font-sans truncate max-w-[220px]" title={s.marketSlug}>
-                            {s.marketSlug || s.marketConditionId.slice(0, 14) + '...'}
+                          <td className="px-3 py-2 font-sans truncate max-w-[220px]" title={lbl.title}>
+                            {lbl.display}
                           </td>
                           <td className="px-3 py-2 font-sans">
                             {resolvedName ? (

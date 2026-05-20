@@ -132,3 +132,22 @@ export async function getOutcomesByConditionIds(
   }
   return map
 }
+
+/**
+ * Batch variant returning the human-readable question per conditionId.
+ * Same shape contract as {@link getOutcomesByConditionIds}.
+ */
+export async function getQuestionsByConditionIds(
+  conditionIds: string[],
+): Promise<Map<string, string>> {
+  const map = new Map<string, string>()
+  if (!prisma || conditionIds.length === 0) return map
+  const rows = await prisma.marketMetadata.findMany({
+    where: { conditionId: { in: conditionIds } },
+    select: { conditionId: true, question: true },
+  })
+  for (const r of rows) {
+    if (r.question) map.set(r.conditionId, r.question)
+  }
+  return map
+}
