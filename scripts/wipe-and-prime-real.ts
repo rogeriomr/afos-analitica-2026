@@ -119,7 +119,7 @@ async function main(): Promise<void> {
             fetchValue(addr),
           ])
 
-          const walletId = await persistWallet({ proxyAddress: addr, username: profile?.pseudonym ?? null })
+          const walletId = await persistWallet({ proxyAddress: addr, username: profile?.pseudonym ?? undefined })
           if (!walletId) {
             errors++
             return
