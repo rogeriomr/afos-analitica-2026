@@ -1,20 +1,37 @@
 /**
- * Slug → conditionId Resolver
+ * Slug → conditionId(s) Resolver
  *
  * Polymarket holder/positions/trades endpoints key off conditionId (66-char
  * hex). Our `ELECTION_REGISTRY` only knows event slugs. This module bridges
- * the two via gamma-api (`fetchEventBySlug`) and caches the result in Redis
- * for 7 days — conditionId is immutable once an event ships, so a long TTL
- * is safe.
+ * the two via gamma-api (`fetchEventBySlug`).
  *
- * Failure mode: returns null (logged) — callers MUST handle null and skip
- * the market for this run; the next cron will re-attempt.
+ * Most Polymarket election EVENTS contain N candidate sub-markets (each a
+ * binary Yes/No: "Will Lula win?", "Will Tarcísio win?", ...). We track
+ * the top N active sub-markets per event by volume so analysts see ALL
+ * the relevant candidates, not just the single highest-volume one.
+ *
+ * Failure mode: returns `[]` / `null` (logged) — callers MUST handle the
+ * empty case; the next cron will re-attempt.
  */
 
 import { Redis } from '@upstash/redis'
-import { fetchEventBySlug } from '../polymarket/client'
+import { fetchEventBySlug, type ParsedMarket } from '../polymarket/client'
 import { isValidConditionId } from './client'
 import { prisma } from '../../../lib/db'
+
+/** How many top-volume active sub-markets to track per event (default). */
+export const DEFAULT_TOP_N_PER_EVENT = 15
+
+export interface ResolvedSubMarket {
+  conditionId: string
+  question: string
+  /** The event-level slug (same for all sub-markets of the same event). */
+  eventSlug: string
+  /** Per-sub-market slug from gamma-api (e.g. "will-lula-win"). */
+  marketSlug: string
+  volume: number
+  outcomes: string[]
+}
 
 const CACHE_PREFIX = 'wallet-intel:slug-cid:'
 const CACHE_TTL_SECONDS = 7 * 24 * 60 * 60 // 7 days
@@ -26,15 +43,90 @@ function getRedis(): Redis | null {
   return new Redis({ url, token })
 }
 
+async function persistMetadata(market: ResolvedSubMarket) {
+  if (!prisma) return
+  const outcomes = market.outcomes.map((name, index) => ({ index, name }))
+  try {
+    await prisma.marketMetadata.upsert({
+      where: { conditionId: market.conditionId },
+      create: {
+        conditionId: market.conditionId,
+        marketSlug: market.eventSlug,
+        question: market.question,
+        outcomesJson: outcomes,
+      },
+      update: {
+        marketSlug: market.eventSlug,
+        question: market.question,
+        outcomesJson: outcomes,
+        lastFetchedAt: new Date(),
+      },
+    })
+  } catch (err) {
+    console.warn(
+      `[conditionid-resolver] failed to persist MarketMetadata for ${market.conditionId}:`,
+      err instanceof Error ? err.message : err,
+    )
+  }
+}
+
 /**
- * Resolve a Polymarket event slug to the conditionId of its first market.
+ * Resolve a Polymarket event slug to the top-N most-traded ACTIVE sub-markets.
  *
- * Lookup order:
- *   1. Redis cache (`wallet-intel:slug-cid:{slug}`)
- *   2. gamma-api via `fetchEventBySlug` — uses event.markets[0].conditionId
+ * Each entry is a candidate-level binary market (Yes/No). The same event slug
+ * (e.g. "brazil-presidential-election") expands to 15+ candidates: Tarcísio,
+ * Lula, Bolsonaros, Haddad, etc.
  *
- * Returns null when the slug is unknown, the event has no markets, or the
- * first market's conditionId is missing/malformed.
+ * Side effect: upserts MarketMetadata for every returned market so downstream
+ * UI can surface the candidate question + Yes/No outcomes.
+ */
+export async function resolveActiveConditionIds(
+  slug: string,
+  opts?: { topN?: number },
+): Promise<ResolvedSubMarket[]> {
+  if (!slug || typeof slug !== 'string') return []
+  const topN = opts?.topN ?? DEFAULT_TOP_N_PER_EVENT
+
+  const event = await fetchEventBySlug(slug)
+  if (!event || !event.markets || event.markets.length === 0) {
+    console.warn(`[conditionid-resolver] No markets for slug "${slug}"`)
+    return []
+  }
+
+  // Filter to active + open + valid conditionId, sort by volume desc, slice top N.
+  const candidates: ResolvedSubMarket[] = event.markets
+    .filter(
+      (m: ParsedMarket) =>
+        m.active &&
+        !m.closed &&
+        m.conditionId &&
+        isValidConditionId(m.conditionId),
+    )
+    .map((m: ParsedMarket) => ({
+      conditionId: m.conditionId,
+      question: m.question || event.title || '',
+      eventSlug: slug,
+      marketSlug: slug,
+      volume: m.volume || 0,
+      outcomes: m.outcomes ?? [],
+    }))
+    .sort((a, b) => b.volume - a.volume)
+    .slice(0, topN)
+
+  // Persist metadata for every sub-market we'll ingest. Best-effort — failure
+  // here does NOT break the resolver result.
+  await Promise.all(candidates.map(persistMetadata))
+
+  return candidates
+}
+
+/**
+ * Backward-compat: resolve a slug to a SINGLE conditionId (the top-volume
+ * active sub-market). Mirrors the previous behavior but routes through the
+ * new resolver so MarketMetadata is still populated for that one.
+ *
+ * Prefer `resolveActiveConditionIds` for new code — this only returns one
+ * candidate per event, which silently hides the other 14+.
  */
 export async function resolveConditionId(slug: string): Promise<string | null> {
   if (!slug || typeof slug !== 'string') return null
@@ -42,13 +134,10 @@ export async function resolveConditionId(slug: string): Promise<string | null> {
   const redis = getRedis()
   const cacheKey = `${CACHE_PREFIX}${slug}`
 
-  // 1. Cache hit
   if (redis) {
     try {
       const cached = await redis.get<string>(cacheKey)
-      if (cached && isValidConditionId(cached)) {
-        return cached
-      }
+      if (cached && isValidConditionId(cached)) return cached
     } catch (err) {
       console.warn(
         `[conditionid-resolver] Redis read failed for ${slug}:`,
@@ -57,63 +146,12 @@ export async function resolveConditionId(slug: string): Promise<string | null> {
     }
   }
 
-  // 2. Fetch from gamma-api
-  const event = await fetchEventBySlug(slug)
-  if (!event || !event.markets || event.markets.length === 0) {
-    console.warn(`[conditionid-resolver] No markets for slug "${slug}"`)
-    return null
-  }
+  const candidates = await resolveActiveConditionIds(slug, { topN: 1 })
+  const first = candidates[0]?.conditionId ?? null
 
-  const firstMarket = event.markets[0]
-  const firstConditionId = firstMarket?.conditionId
-  if (!firstConditionId || !isValidConditionId(firstConditionId)) {
-    console.warn(
-      `[conditionid-resolver] Invalid/missing conditionId for slug "${slug}": "${firstConditionId}"`,
-    )
-    return null
-  }
-
-  // Best-effort persistence of market metadata (outcome names, question) so
-  // downstream UIs can surface "Lula" instead of "outcome 0". ParsedMarket
-  // already exposes outcomes as a string[] (parsed from Gamma's JSON string)
-  // — the array index IS the outcome index, which is the contract used by
-  // /holders, /positions and /trades responses. Failure here MUST NOT break
-  // slug resolution: the next resolver call will retry, and consumers fall
-  // back to "outcome N" when metadata is missing.
-  if (prisma) {
-    const outcomes = (firstMarket?.outcomes ?? []).map((name, index) => ({
-      index,
-      name,
-    }))
-    const question = firstMarket?.question || event.title || null
+  if (first && redis) {
     try {
-      await prisma.marketMetadata.upsert({
-        where: { conditionId: firstConditionId },
-        create: {
-          conditionId: firstConditionId,
-          marketSlug: slug,
-          question,
-          outcomesJson: outcomes,
-        },
-        update: {
-          marketSlug: slug,
-          question,
-          outcomesJson: outcomes,
-          lastFetchedAt: new Date(),
-        },
-      })
-    } catch (err) {
-      console.warn(
-        `[conditionid-resolver] failed to persist MarketMetadata for ${slug}:`,
-        err instanceof Error ? err.message : err,
-      )
-    }
-  }
-
-  // Best-effort cache write — failure does not break resolution.
-  if (redis) {
-    try {
-      await redis.set(cacheKey, firstConditionId, { ex: CACHE_TTL_SECONDS })
+      await redis.set(cacheKey, first, { ex: CACHE_TTL_SECONDS })
     } catch (err) {
       console.warn(
         `[conditionid-resolver] Redis write failed for ${slug}:`,
@@ -122,5 +160,5 @@ export async function resolveConditionId(slug: string): Promise<string | null> {
     }
   }
 
-  return firstConditionId
+  return first
 }

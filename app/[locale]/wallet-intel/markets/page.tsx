@@ -6,7 +6,11 @@ import {
   getFlagPath,
   type ElectionRegistryEntry,
 } from '../../../lib/polymarket/country-market-map';
-import { resolveConditionId } from '../../../lib/wallet-intel/conditionid-resolver';
+import {
+  resolveActiveConditionIds,
+  type ResolvedSubMarket,
+} from '../../../lib/wallet-intel/conditionid-resolver';
+import { extractCandidateFromQuestion } from '../../../lib/wallet-intel/market-metadata';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -26,21 +30,18 @@ function tFor(messages: Awaited<ReturnType<typeof getMessages>>) {
   };
 }
 
-interface ResolvedEntry {
+interface ResolvedEvent {
   entry: ElectionRegistryEntry;
-  conditionId: string | null;
+  subMarkets: ResolvedSubMarket[];
 }
 
-// resolveConditionId caches in Redis with 7d TTL — N GETs per render are
-// fast cache hits after the first resolve. If this becomes a hot path,
-// add an in-process Map cache here.
-async function resolveAll(entries: ElectionRegistryEntry[]): Promise<ResolvedEntry[]> {
+async function resolveAll(entries: ElectionRegistryEntry[]): Promise<ResolvedEvent[]> {
   const settled = await Promise.allSettled(
-    entries.map(async (e) => ({ entry: e, conditionId: await resolveConditionId(e.slug) })),
+    entries.map(async (e) => ({ entry: e, subMarkets: await resolveActiveConditionIds(e.slug) })),
   );
   return settled.map((r, i) => {
     if (r.status === 'fulfilled') return r.value;
-    return { entry: entries[i], conditionId: null };
+    return { entry: entries[i], subMarkets: [] };
   });
 }
 
@@ -57,6 +58,25 @@ function formatDate(iso: string, locale: Locale): string {
   }
 }
 
+function formatVolume(n: number): string {
+  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `$${(n / 1_000).toFixed(0)}k`;
+  return `$${n.toFixed(0)}`;
+}
+
+/**
+ * Try to read the candidate name from the sub-market's question (e.g. "Will
+ * Lula win..." → "Lula"). Falls back to a truncated question when extraction
+ * fails — preserves a useful label even for non-political binaries.
+ */
+function candidateLabel(question: string): string {
+  const c = extractCandidateFromQuestion(question);
+  if (c) return c;
+  // Strip leading "Will " for compact display when the question doesn't fit
+  // the candidate-extraction pattern.
+  return question.replace(/^Will\s+/i, '').slice(0, 60);
+}
+
 export default async function MarketsPage({ params }: PageProps) {
   const { locale: rawLocale } = await params;
   const locale = (isValidLocale(rawLocale) ? rawLocale : 'pt-BR') as Locale;
@@ -66,11 +86,11 @@ export default async function MarketsPage({ params }: PageProps) {
   const enabled = ELECTION_REGISTRY.filter((e) => e.enabled);
   const resolved = await resolveAll(enabled);
 
-  const okCount = resolved.filter((r) => r.conditionId != null).length;
-  const failedCount = resolved.length - okCount;
+  const failedCount = resolved.filter((r) => r.subMarkets.length === 0).length;
+  const totalSubMarkets = resolved.reduce((s, r) => s + r.subMarkets.length, 0);
 
   // Group by country for readability.
-  const byCountry = new Map<string, ResolvedEntry[]>();
+  const byCountry = new Map<string, ResolvedEvent[]>();
   for (const r of resolved) {
     const arr = byCountry.get(r.entry.iso3) ?? [];
     arr.push(r);
@@ -88,6 +108,9 @@ export default async function MarketsPage({ params }: PageProps) {
       <header>
         <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-slate-50">{t('wiMarkets.title')}</h1>
         <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">{t('wiMarkets.subtitle')}</p>
+        <p className="mt-2 text-xs text-slate-500 dark:text-slate-500">
+          {t('wiMarkets.totalSubMarkets')} <span className="font-mono font-semibold">{totalSubMarkets}</span>
+        </p>
       </header>
 
       {failedCount > 0 && (
@@ -102,8 +125,8 @@ export default async function MarketsPage({ params }: PageProps) {
       ) : (
         <div className="space-y-5">
           {countryOrder.map((iso3) => {
-            const items = byCountry.get(iso3)!;
-            const first = items[0].entry;
+            const events = byCountry.get(iso3)!;
+            const first = events[0].entry;
             return (
               <section
                 key={iso3}
@@ -122,59 +145,70 @@ export default async function MarketsPage({ params }: PageProps) {
                     {first.countryName}
                   </h2>
                   <span className="ml-auto text-[10px] uppercase tracking-wider text-slate-500 dark:text-slate-500">
-                    {items.length}
+                    {events.length} {t('wiMarkets.eventsLabel')}
                   </span>
                 </header>
-                <ul className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
-                  {items.map(({ entry, conditionId }) => {
-                    const disabled = conditionId == null;
-                    const content = (
+
+                <div className="space-y-4">
+                  {events.map(({ entry, subMarkets }) => {
+                    const disabled = subMarkets.length === 0;
+                    return (
                       <div
-                        className={`h-full p-3 rounded-lg border transition-colors ${
-                          disabled
-                            ? 'border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 opacity-60 cursor-not-allowed'
-                            : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:border-primary hover:shadow-sm'
-                        }`}
+                        key={entry.slug}
+                        className="rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/40 p-3"
                       >
-                        <div className="flex items-start justify-between gap-2 mb-1.5">
-                          <p className="text-sm font-semibold text-slate-800 dark:text-slate-200 leading-tight">
-                            {entry.electionType}
-                          </p>
-                          {entry.isPrimary && (
-                            <span className="text-[9px] uppercase tracking-wider font-bold bg-primary/10 text-primary px-1.5 py-0.5 rounded">
-                              {t('wiMarkets.primaryBadge')}
-                            </span>
-                          )}
+                        <div className="flex items-start justify-between gap-2 mb-2 flex-wrap">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <p className="text-sm font-semibold text-slate-800 dark:text-slate-200">
+                                {entry.electionType}
+                              </p>
+                              {entry.isPrimary && (
+                                <span className="text-[9px] uppercase tracking-wider font-bold bg-primary/10 text-primary px-1.5 py-0.5 rounded">
+                                  {t('wiMarkets.primaryBadge')}
+                                </span>
+                              )}
+                              <span className="text-[10px] text-slate-500 dark:text-slate-500">
+                                {t('wiMarkets.electionDate')} {formatDate(entry.electionDate, locale)}
+                              </span>
+                            </div>
+                            <p className="font-mono text-[10px] text-slate-400 dark:text-slate-600 break-all mt-0.5">
+                              {entry.slug}
+                            </p>
+                          </div>
+                          <span className="text-[10px] uppercase tracking-wider text-slate-500 dark:text-slate-400 font-mono">
+                            {subMarkets.length} {t('wiMarkets.subMarketsLabel')}
+                          </span>
                         </div>
-                        <p className="text-[11px] text-slate-500 dark:text-slate-400 mb-1.5">
-                          {t('wiMarkets.electionDate')} {formatDate(entry.electionDate, locale)}
-                        </p>
-                        <p className="font-mono text-[10px] text-slate-400 dark:text-slate-500 break-all leading-tight">
-                          {entry.slug}
-                        </p>
-                        {disabled && (
-                          <p className="mt-2 text-[10px] uppercase tracking-wider font-semibold text-amber-600 dark:text-amber-400">
+
+                        {disabled ? (
+                          <p className="text-[11px] uppercase tracking-wider font-semibold text-amber-600 dark:text-amber-400 mt-1">
                             {t('wiMarkets.unavailable')}
                           </p>
+                        ) : (
+                          <ul className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                            {subMarkets.map((sub) => (
+                              <li key={sub.conditionId}>
+                                <Link
+                                  href={`/${locale}/wallet-intel/market/${sub.conditionId}`}
+                                  className="block p-2.5 rounded-md border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:border-primary hover:shadow-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                                  title={sub.question}
+                                >
+                                  <p className="text-sm font-semibold text-slate-900 dark:text-slate-100 truncate">
+                                    {candidateLabel(sub.question)}
+                                  </p>
+                                  <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5 font-mono tabular-nums">
+                                    {t('wiMarkets.volumeLabel')} {formatVolume(sub.volume)}
+                                  </p>
+                                </Link>
+                              </li>
+                            ))}
+                          </ul>
                         )}
                       </div>
                     );
-                    return (
-                      <li key={entry.slug}>
-                        {disabled ? (
-                          content
-                        ) : (
-                          <Link
-                            href={`/${locale}/wallet-intel/market/${conditionId}`}
-                            className="block focus:outline-none focus-visible:ring-2 focus-visible:ring-primary rounded-lg"
-                          >
-                            {content}
-                          </Link>
-                        )}
-                      </li>
-                    );
                   })}
-                </ul>
+                </div>
               </section>
             );
           })}

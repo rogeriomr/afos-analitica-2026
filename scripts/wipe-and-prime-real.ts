@@ -15,7 +15,7 @@ import './_load-env'
 import { PrismaClient } from '@prisma/client'
 import { PrismaNeon } from '@prisma/adapter-neon'
 import { ELECTION_REGISTRY } from '../app/lib/polymarket/country-market-map'
-import { resolveConditionId } from '../app/lib/wallet-intel/conditionid-resolver'
+import { resolveActiveConditionIds } from '../app/lib/wallet-intel/conditionid-resolver'
 import {
   fetchHolders,
   fetchProfile,
@@ -68,34 +68,40 @@ async function main(): Promise<void> {
   await prisma.wallet.deleteMany()
   console.log('  done\n')
 
-  console.log('=== resolving 19 enabled markets ===')
+  console.log('=== resolving 19 enabled events → top-N sub-markets each ===')
   const enabled = ELECTION_REGISTRY.filter((e) => e.enabled)
-  type MarketResolved = { slug: string; conditionId: string }
+  type MarketResolved = { eventSlug: string; conditionId: string; question: string }
   const markets: MarketResolved[] = []
   for (const entry of enabled) {
-    const cid = await resolveConditionId(entry.slug)
-    if (cid) {
-      markets.push({ slug: entry.slug, conditionId: cid })
-      console.log(`  ✓ ${entry.slug} → ${cid.slice(0, 12)}...`)
-    } else {
-      console.log(`  ✗ ${entry.slug} — unresolved`)
+    const subs = await resolveActiveConditionIds(entry.slug)
+    if (subs.length === 0) {
+      console.log(`  ✗ ${entry.slug} — no active sub-markets`)
+      continue
     }
+    for (const sub of subs) {
+      markets.push({ eventSlug: entry.slug, conditionId: sub.conditionId, question: sub.question })
+    }
+    console.log(`  ✓ ${entry.slug} → ${subs.length} candidates`)
   }
-  console.log(`  ${markets.length}/${enabled.length} resolved\n`)
+  console.log(`  ${markets.length} total sub-markets across ${enabled.length} events\n`)
 
   console.log('=== fetching holders + snapshotting ===')
   const uniqueAddresses = new Set<string>()
   const now = new Date()
   for (const m of markets) {
     const holders = await fetchHolders(m.conditionId, { limit: HOLDERS_PER_MARKET })
+    if (holders.length === 0) {
+      console.log(`  ${m.eventSlug} | ${m.question.slice(0, 50)}: 0 holders (skipped)`)
+      continue
+    }
     await persistMarketHolderSnapshot({
       conditionId: m.conditionId,
-      marketSlug: m.slug,
+      marketSlug: m.eventSlug,
       holders,
       snapshotAt: now,
     })
     for (const h of holders) uniqueAddresses.add(h.holder)
-    console.log(`  ${m.slug}: ${holders.length} holders`)
+    console.log(`  ${m.eventSlug} | ${m.question.slice(0, 50)}: ${holders.length} holders`)
   }
   console.log(`  ${uniqueAddresses.size} unique wallets to refresh\n`)
 
@@ -127,11 +133,13 @@ async function main(): Promise<void> {
 
           await persistWalletProfile(walletId, profile)
 
-          // Group trades by marketSlug, use registry slug if conditionId matches one
+          // Group trades by event slug — when a trade's conditionId matches a
+          // tracked sub-market we attribute it to the parent event so all
+          // candidates of one election land under the same marketSlug.
           const tradesBySlug = new Map<string, typeof trades>()
           for (const t of trades) {
             const market = markets.find((m) => m.conditionId === t.conditionId)
-            const slug = market?.slug ?? t.conditionId
+            const slug = market?.eventSlug ?? t.conditionId
             const arr = tradesBySlug.get(slug) ?? []
             arr.push(t)
             tradesBySlug.set(slug, arr)

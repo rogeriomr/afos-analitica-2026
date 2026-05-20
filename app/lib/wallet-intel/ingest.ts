@@ -28,7 +28,7 @@ import {
   fetchValue,
   isValidWalletAddress,
 } from './client'
-import { resolveConditionId } from './conditionid-resolver'
+import { resolveActiveConditionIds } from './conditionid-resolver'
 import {
   persistChainFirstActivity,
   persistMarketHolderSnapshot,
@@ -209,45 +209,52 @@ export async function refreshWalletData(): Promise<IngestResult> {
     if (Date.now() - startedAt > TIME_BUDGET_MS) {
       partial = true
       console.warn(
-        `[wallet-ingest] Time budget hit during market loop — ${marketsProcessed}/${markets.length} markets done`,
+        `[wallet-ingest] Time budget hit during market loop — ${marketsProcessed}/${markets.length} events done`,
       )
       break
     }
 
-    const conditionId = await resolveConditionId(entry.slug)
-    if (!conditionId) {
-      console.warn(`[wallet-ingest] No conditionId for ${entry.slug} — skipping`)
+    // Each ELECTION_REGISTRY slug is an EVENT containing N candidate
+    // sub-markets (one per candidate, each binary Yes/No). Expand to all
+    // active sub-markets so we capture Lula/Bolsonaro/Haddad concentration
+    // — not just the highest-volume one.
+    const subMarkets = await resolveActiveConditionIds(entry.slug)
+    if (subMarkets.length === 0) {
+      console.warn(`[wallet-ingest] No active sub-markets for ${entry.slug} — skipping`)
       continue
     }
 
-    const holders = await fetchHolders(conditionId, { limit: HOLDERS_PER_MARKET })
-    if (holders.length === 0) {
-      console.warn(`[wallet-ingest] No holders returned for ${entry.slug}`)
-      // Still count the market as processed — empty result is signal too.
-      marketsProcessed++
-      continue
-    }
-
-    await persistMarketHolderSnapshot({
-      conditionId,
-      marketSlug: entry.slug,
-      holders,
-      snapshotAt,
-    })
-
-    for (const h of holders) {
-      const addr = h.holder.toLowerCase()
-      if (!isValidWalletAddress(addr)) continue
-      if (!uniqueWallets.has(addr)) {
-        uniqueWallets.set(addr, {
-          address: addr,
-          username: h.username,
-          contextMarketSlug: entry.slug,
-        })
+    for (const sub of subMarkets) {
+      const holders = await fetchHolders(sub.conditionId, { limit: HOLDERS_PER_MARKET })
+      if (holders.length === 0) {
+        // Empty result is signal too — but don't OVERWRITE a previous good
+        // snapshot for this market with empty data. Skip the persist entirely
+        // when holders is empty (next tick will retry).
+        marketsProcessed++
+        continue
       }
-    }
 
-    marketsProcessed++
+      await persistMarketHolderSnapshot({
+        conditionId: sub.conditionId,
+        marketSlug: entry.slug,
+        holders,
+        snapshotAt,
+      })
+
+      for (const h of holders) {
+        const addr = h.holder.toLowerCase()
+        if (!isValidWalletAddress(addr)) continue
+        if (!uniqueWallets.has(addr)) {
+          uniqueWallets.set(addr, {
+            address: addr,
+            username: h.username,
+            contextMarketSlug: entry.slug,
+          })
+        }
+      }
+
+      marketsProcessed++
+    }
   }
 
   // ── 3. Filter out recently-refreshed wallets ──────────────────
