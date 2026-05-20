@@ -104,6 +104,8 @@
     "pbDeltaNoData": "no data",
     "flagsEmpty": "No red flags for this wallet",
     "positionsEmpty": "No recent positions",
+    "positionsAfosSection": "AFOS-tracked markets",
+    "positionsOtherSection": "Other Polymarket markets",
     "tradesEmpty": "No trades in the last 30 days",
     "profileEmpty": "Profile not captured yet",
     "colMarket": "Market",

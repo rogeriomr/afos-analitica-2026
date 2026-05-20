@@ -104,6 +104,8 @@
     "pbDeltaNoData": "sin datos",
     "flagsEmpty": "Esta billetera no tiene red flags",
     "positionsEmpty": "Sin posiciones recientes",
+    "positionsAfosSection": "Mercados rastreados por AFOS",
+    "positionsOtherSection": "Otros mercados de Polymarket",
     "tradesEmpty": "Sin operaciones en los últimos 30 días",
     "profileEmpty": "Perfil todavía no capturado",
     "colMarket": "Mercado",

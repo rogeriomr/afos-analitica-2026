@@ -104,6 +104,8 @@
     "pbDeltaNoData": "sem dados",
     "flagsEmpty": "Sem red flags para esta carteira",
     "positionsEmpty": "Sem posições recentes",
+    "positionsAfosSection": "Mercados rastreados pelo AFOS",
+    "positionsOtherSection": "Outros mercados Polymarket",
     "tradesEmpty": "Sem operações nos últimos 30 dias",
     "profileEmpty": "Perfil ainda não capturado",
     "colMarket": "Mercado",

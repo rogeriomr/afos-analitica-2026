@@ -2,8 +2,14 @@
 
 import { useMemo, useState } from 'react';
 import { useTranslation } from '../../i18n/context';
+import { ELECTION_REGISTRY } from '../../lib/polymarket/country-market-map';
 import { FlagCard } from './FlagCard';
 import { RelativeTime } from './RelativeTime';
+
+// Set of slugs we explicitly track for AFOS electoral risk intel. Wallets often
+// trade on dozens of unrelated markets; surfacing the AFOS-relevant subset first
+// lets analysts spot political-market behavior without scrolling.
+const AFOS_TRACKED_SLUGS = new Set(ELECTION_REGISTRY.filter((e) => e.enabled).map((e) => e.slug));
 
 interface Position {
   marketConditionId: string;
@@ -152,6 +158,51 @@ function ProbabilityChip({
   );
 }
 
+/**
+ * Plain HTML table for a slice of positions. Pulled out so we can render two
+ * sections (AFOS-tracked vs other) without duplicating the table markup.
+ */
+function PositionsTable({
+  positions,
+  t,
+}: {
+  positions: Position[];
+  t: (key: string) => string;
+}) {
+  return (
+    <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-x-auto">
+      <table className="min-w-full text-sm">
+        <thead className="bg-slate-50 dark:bg-slate-800/60 text-left text-[11px] uppercase tracking-wider text-slate-500 dark:text-slate-400">
+          <tr>
+            <th className="px-3 py-2.5 font-semibold">{t('wiWallet.colMarket')}</th>
+            <th className="px-3 py-2.5 font-semibold">{t('wiWallet.colOutcome')}</th>
+            <th className="px-3 py-2.5 font-semibold text-right">{t('wiWallet.colSize')}</th>
+            <th className="px-3 py-2.5 font-semibold text-right">{t('wiWallet.colAvgPrice')}</th>
+            <th className="px-3 py-2.5 font-semibold text-right">{t('wiWallet.colCurrentValue')}</th>
+            <th className="px-3 py-2.5 font-semibold text-right">{t('wiWallet.colPnl')}</th>
+            <th className="px-3 py-2.5 font-semibold text-right">{t('wiWallet.colPnlPercent')}</th>
+            <th className="px-3 py-2.5 font-semibold">{t('wiWallet.colSnapshot')}</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-200 dark:divide-slate-800 font-mono tabular-nums text-xs">
+          {positions.map((p, i) => (
+            <tr key={`${p.marketConditionId}-${p.outcomeIndex}-${i}`} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+              <td className="px-3 py-2 truncate max-w-[260px] font-sans" title={p.marketSlug}>{p.marketSlug || p.marketConditionId.slice(0, 14) + '...'}</td>
+              <td className="px-3 py-2 font-sans">{p.outcomeName} <span className="text-slate-400">({p.outcomeIndex})</span></td>
+              <td className="px-3 py-2 text-right">{p.size.toFixed(2)}</td>
+              <td className="px-3 py-2 text-right">{p.avgPrice.toFixed(3)}</td>
+              <td className="px-3 py-2 text-right">${formatUsd(p.currentValueUsd)}</td>
+              <td className={`px-3 py-2 text-right font-semibold ${pnlClass(p.pnlUsd)}`}>{p.pnlUsd >= 0 ? '+' : ''}${formatUsd(p.pnlUsd)}</td>
+              <td className={`px-3 py-2 text-right ${pnlClass(p.pnlUsd)}`}>{p.pnlPercent == null ? '—' : `${p.pnlPercent.toFixed(1)}%`}</td>
+              <td className="px-3 py-2 font-sans text-slate-500">{p.snapshotDate.slice(0, 10)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export function WalletDetailTabs({
   flags,
   positions,
@@ -162,6 +213,18 @@ export function WalletDetailTabs({
 }: Props) {
   const { t } = useTranslation();
   const [tab, setTab] = useState<TabKey>(flags.length > 0 ? 'flags' : 'positions');
+
+  // Split positions into AFOS-tracked vs everything-else so the analyst sees
+  // political-market activity first.
+  const { afosPositions, otherPositions } = useMemo(() => {
+    const afos: Position[] = [];
+    const other: Position[] = [];
+    for (const p of positions) {
+      if (AFOS_TRACKED_SLUGS.has(p.marketSlug)) afos.push(p);
+      else other.push(p);
+    }
+    return { afosPositions: afos, otherPositions: other };
+  }, [positions]);
 
   // Position-building sort state — default newest first.
   const [pbSort, setPbSort] = useState<{ key: PbSortKey; dir: SortDir }>({
@@ -269,35 +332,33 @@ export function WalletDetailTabs({
           positions.length === 0 ? (
             <p className="text-sm text-slate-500 dark:text-slate-400">{t('wiWallet.positionsEmpty')}</p>
           ) : (
-            <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-x-auto">
-              <table className="min-w-full text-sm">
-                <thead className="bg-slate-50 dark:bg-slate-800/60 text-left text-[11px] uppercase tracking-wider text-slate-500 dark:text-slate-400">
-                  <tr>
-                    <th className="px-3 py-2.5 font-semibold">{t('wiWallet.colMarket')}</th>
-                    <th className="px-3 py-2.5 font-semibold">{t('wiWallet.colOutcome')}</th>
-                    <th className="px-3 py-2.5 font-semibold text-right">{t('wiWallet.colSize')}</th>
-                    <th className="px-3 py-2.5 font-semibold text-right">{t('wiWallet.colAvgPrice')}</th>
-                    <th className="px-3 py-2.5 font-semibold text-right">{t('wiWallet.colCurrentValue')}</th>
-                    <th className="px-3 py-2.5 font-semibold text-right">{t('wiWallet.colPnl')}</th>
-                    <th className="px-3 py-2.5 font-semibold text-right">{t('wiWallet.colPnlPercent')}</th>
-                    <th className="px-3 py-2.5 font-semibold">{t('wiWallet.colSnapshot')}</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-200 dark:divide-slate-800 font-mono tabular-nums text-xs">
-                  {positions.map((p, i) => (
-                    <tr key={`${p.marketConditionId}-${p.outcomeIndex}-${i}`} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
-                      <td className="px-3 py-2 truncate max-w-[260px] font-sans" title={p.marketSlug}>{p.marketSlug || p.marketConditionId.slice(0, 14) + '...'}</td>
-                      <td className="px-3 py-2 font-sans">{p.outcomeName} <span className="text-slate-400">({p.outcomeIndex})</span></td>
-                      <td className="px-3 py-2 text-right">{p.size.toFixed(2)}</td>
-                      <td className="px-3 py-2 text-right">{p.avgPrice.toFixed(3)}</td>
-                      <td className="px-3 py-2 text-right">${formatUsd(p.currentValueUsd)}</td>
-                      <td className={`px-3 py-2 text-right font-semibold ${pnlClass(p.pnlUsd)}`}>{p.pnlUsd >= 0 ? '+' : ''}${formatUsd(p.pnlUsd)}</td>
-                      <td className={`px-3 py-2 text-right ${pnlClass(p.pnlUsd)}`}>{p.pnlPercent == null ? '—' : `${p.pnlPercent.toFixed(1)}%`}</td>
-                      <td className="px-3 py-2 font-sans text-slate-500">{p.snapshotDate.slice(0, 10)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="space-y-5">
+              {afosPositions.length > 0 && (
+                <section>
+                  <header className="mb-2 flex items-baseline gap-2">
+                    <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                      {t('wiWallet.positionsAfosSection')}
+                    </h3>
+                    <span className="text-[11px] font-mono tabular-nums text-slate-500 dark:text-slate-400">
+                      {afosPositions.length}
+                    </span>
+                  </header>
+                  <PositionsTable positions={afosPositions} t={t} />
+                </section>
+              )}
+              {otherPositions.length > 0 && (
+                <section>
+                  <header className="mb-2 flex items-baseline gap-2">
+                    <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                      {t('wiWallet.positionsOtherSection')}
+                    </h3>
+                    <span className="text-[11px] font-mono tabular-nums text-slate-500 dark:text-slate-400">
+                      {otherPositions.length}
+                    </span>
+                  </header>
+                  <PositionsTable positions={otherPositions} t={t} />
+                </section>
+              )}
             </div>
           )
         )}
