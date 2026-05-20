@@ -260,8 +260,12 @@ function parseHolder(raw: unknown): PolymarketHolder | null {
   if (!tokenId || !holder) return null;
   return {
     tokenId,
-    holder,
-    username: asString(r.username) ?? asString(r.name),
+    // Normalize address to lowercase — every downstream lookup (dedup,
+    // proxyAddress matching, RedFlag joins) expects lowercase hex.
+    holder: holder.toLowerCase(),
+    // Polymarket /holders uses `pseudonym` for the public name; fall back
+    // to `username`/`name` for forward-compat with other Data API endpoints.
+    username: asString(r.username) ?? asString(r.name) ?? asString(r.pseudonym),
     amount: asNumber(r.amount),
     outcomeIndex: asNumber(r.outcomeIndex),
   };
@@ -399,8 +403,25 @@ export async function fetchHolders(
   const qs = buildQuery({ market: conditionId, limit: opts?.limit });
   const res = await fetchWithRetry(`${DATA_API_BASE}/holders${qs}`, 'general');
   if (!res) return [];
-  const rows = await safeJsonArray(res);
-  return rows.map(parseHolder).filter((h): h is PolymarketHolder => h !== null);
+  const tokenGroups = await safeJsonArray(res);
+
+  // Polymarket /holders returns [{ token, holders: [{...}, ...] }, ...] — one
+  // group per outcome token. Flatten into the canonical PolymarketHolder[]
+  // by propagating the group's token id onto each inner holder before parse.
+  const flat: PolymarketHolder[] = [];
+  for (const group of tokenGroups) {
+    if (!group || typeof group !== 'object') continue;
+    const g = group as Record<string, unknown>;
+    const tokenId = asString(g.token) ?? asString(g.tokenId);
+    const inner = Array.isArray(g.holders) ? g.holders : [];
+    for (const h of inner) {
+      if (!h || typeof h !== 'object') continue;
+      const enriched = { ...(h as Record<string, unknown>), tokenId: tokenId ?? '' };
+      const parsed = parseHolder(enriched);
+      if (parsed) flat.push(parsed);
+    }
+  }
+  return flat;
 }
 
 /**
