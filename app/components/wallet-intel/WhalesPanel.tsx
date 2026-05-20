@@ -32,7 +32,8 @@ interface Props {
 
 const TIMEFRAMES: ReadonlyArray<WhalesTimeframe> = ['24h', '7d', '30d', 'all'];
 
-function formatNumber(n: number): string {
+function formatNumber(n: number | null | undefined): string {
+  if (n == null || !Number.isFinite(n)) return '—';
   return n.toLocaleString('en-US', { maximumFractionDigits: 2 });
 }
 
@@ -203,7 +204,7 @@ export function WhalesPanel({ conditionId, locale, initialData }: Props) {
                     ${formatNumber(w.totalValueUsd)}
                   </td>
                   <td className="px-3 py-2 text-right font-mono tabular-nums text-xs">
-                    {w.tradeCount.toLocaleString()}
+                    {formatNumber(w.tradeCount)}
                   </td>
                   <td className="px-3 py-2">
                     <ScoreGauge score={w.totalScore} variant="compact" emptyLabel="—" />
