@@ -81,6 +81,11 @@ function walletIntelAuthChallenge(): NextResponse {
 }
 
 function checkWalletIntelAuth(request: NextRequest): NextResponse | null {
+  // Dev bypass: localhost is single-user — skip the Basic-auth gate for DX.
+  // `next dev` sets NODE_ENV=development; `next build && next start` and any
+  // Vercel deploy set NODE_ENV=production, so the gate stays armed in prod.
+  if (process.env.NODE_ENV !== 'production') return null;
+
   const password = process.env.WALLET_INTEL_PASSWORD;
   if (!password) {
     // Fail closed — sem env var, ninguém entra (admin-only dashboard).
