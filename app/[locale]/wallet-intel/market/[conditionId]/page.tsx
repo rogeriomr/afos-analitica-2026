@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { headers } from 'next/headers';
 import { getMessages } from '../../../../../lib/i18n/get-messages';
 import { isValidLocale, type Locale } from '../../../../../lib/i18n/config';
 import { getMarketHolders, getMarketWhales } from '../../../../lib/wallet-intel/queries';
@@ -11,6 +12,10 @@ import { WalletAddress } from '../../../../components/wallet-intel/WalletAddress
 import { ConcentrationMeter } from '../../../../components/wallet-intel/ConcentrationMeter';
 import { RelativeTime } from '../../../../components/wallet-intel/RelativeTime';
 import { WhalesPanel } from '../../../../components/wallet-intel/WhalesPanel';
+import {
+  LiquidityImpactCard,
+  type LiquidityImpactData,
+} from '../../../../components/wallet-intel/LiquidityImpactCard';
 import { ELECTION_REGISTRY, getFlagPath } from '../../../../lib/polymarket/country-market-map';
 
 export const runtime = 'nodejs';
@@ -122,6 +127,52 @@ function buildOutcomeBlocks(
   });
 }
 
+/**
+ * Server-side fetch of the orderbook + impact payload from the sibling
+ * `/api/wallet-intel/market/[cid]/orderbook` route. Uses the inbound
+ * `host` header so it works in dev (localhost) and in any prod tenant
+ * domain without baking the URL into env. Tolerates the endpoint not
+ * being deployed yet (404), the upstream Polymarket call failing
+ * (5xx), or a 5-second hang — all fall back to null and the consumer
+ * UI gracefully degrades.
+ */
+async function fetchOrderbookImpact(
+  conditionId: string,
+): Promise<LiquidityImpactData | null> {
+  try {
+    const h = await headers();
+    const host = h.get('host');
+    const proto = h.get('x-forwarded-proto') ?? (host?.includes('localhost') ? 'http' : 'https');
+    if (!host) return null;
+    const url = `${proto}://${host}/api/wallet-intel/market/${conditionId}/orderbook`;
+
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 5000);
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        signal: ctl.signal,
+        // The route itself sets Cache-Control: public, max-age=30 and
+        // does in-process caching. Honour that by participating in
+        // the Next data cache for the same 30 seconds.
+        next: { revalidate: 30 },
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!res.ok) return null;
+    const json = (await res.json()) as LiquidityImpactData;
+    if (!json || typeof json !== 'object') return null;
+    return json;
+  } catch {
+    // Swallow — graceful degradation. The card knows how to render
+    // "Orderbook unavailable" when handed a null payload, but we choose
+    // not to render the card at all when this returns null so the layout
+    // stays clean.
+    return null;
+  }
+}
+
 export default async function MarketDetailPage({ params }: PageProps) {
   const { locale: rawLocale, conditionId: rawCid } = await params;
   const locale = (isValidLocale(rawLocale) ? rawLocale : 'pt-BR') as Locale;
@@ -137,11 +188,12 @@ export default async function MarketDetailPage({ params }: PageProps) {
     );
   }
 
-  const [holders, whales, outcomeMeta, marketQuestion] = await Promise.all([
+  const [holders, whales, outcomeMeta, marketQuestion, orderbookImpact] = await Promise.all([
     getMarketHolders(conditionId),
     getMarketWhales(conditionId),
     getMarketOutcomes(conditionId).catch(() => []),
     getMarketQuestion(conditionId).catch(() => null),
+    fetchOrderbookImpact(conditionId),
   ]);
 
   if ('error' in holders) {
@@ -357,6 +409,14 @@ export default async function MarketDetailPage({ params }: PageProps) {
           })
         )}
       </section>
+
+      {/* Orderbook + simulated impact. Sits between per-outcome
+          concentration (above) and whales (below). Gracefully omitted
+          when the upstream Polymarket call failed — see
+          fetchOrderbookImpact() for the failure modes. */}
+      {orderbookImpact && orderbookImpact.yesBook && (
+        <LiquidityImpactCard data={orderbookImpact} />
+      )}
 
       <WhalesPanel
         conditionId={conditionId}

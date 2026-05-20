@@ -17,6 +17,7 @@ import { coordinatedEntryRule } from './coordinated-entry';
 import { fundingSourceClusterRule } from './funding-source-cluster';
 import { washTradingInternalRule } from './wash-trading-internal';
 import { priceImpactUnexplainedRule } from './price-impact-unexplained';
+import { outsizedVolumeContributorRule } from './outsized-volume-contributor';
 
 export const activeRules: readonly Rule[] = [
   newWalletBigBetRule,
@@ -27,16 +28,20 @@ export const activeRules: readonly Rule[] = [
   coordinatedEntryRule,
 ];
 
+// Rules seeded with enabled=false in FlagRule. They still ship in the
+// registry so the admin UI can list + flip them on once calibrated.
 export const deferredRuleKeys: ReadonlySet<string> = new Set([
   fundingSourceClusterRule.key,
   washTradingInternalRule.key,
   priceImpactUnexplainedRule.key,
+  outsizedVolumeContributorRule.key,
 ]);
 
 export const deferredRules: readonly Rule[] = [
   fundingSourceClusterRule,
   washTradingInternalRule,
   priceImpactUnexplainedRule,
+  outsizedVolumeContributorRule,
 ];
 
 export const allRules: Rule[] = [...activeRules, ...deferredRules];

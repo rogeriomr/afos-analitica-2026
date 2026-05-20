@@ -23,12 +23,31 @@ import type {
 export type Severity = 'low' | 'medium' | 'high' | 'critical';
 
 /**
+ * Cross-wallet market-volume aggregate used by the outsized_volume_contributor
+ * rule. The detector builds one of these per (active) marketConditionId by
+ * scanning the full coordination window's trades grouped by walletId, computes
+ * the distribution of per-wallet shares, and passes the result down through
+ * RuleContext. When the field is absent the rule degrades to a no-op — it
+ * cannot infer cross-wallet stats from a single wallet's trades alone.
+ */
+export interface MarketVolumeContext {
+  /** Sum of |valueUsd| across every wallet's trades on this market in the window. */
+  totalUsd: number;
+  /** Median share-of-market across wallets active on this market. Range [0,1]. */
+  medianWalletShare: number;
+  /** Largest single-wallet share-of-market on this market. Range [0,1]. */
+  top1Share: number;
+}
+
+/**
  * The full evaluation context handed to every rule.
  *
  * - `trades` are the wallet's last 30 days of trades, sorted desc by tradeTimestamp.
  * - `marketHolders` maps marketConditionId → latest MarketHolderSnapshot.
  * - `coordinationGroup` is populated ONLY when the coordinated_entry rule is
  *   being evaluated; for every other rule it will be undefined.
+ * - `marketVolumes` is populated ONLY when the outsized_volume_contributor
+ *   rule is being evaluated; for every other rule it will be undefined.
  */
 export interface RuleContext {
   wallet: Wallet;
@@ -42,6 +61,7 @@ export interface RuleContext {
     valueUsd: number;
     tradeTimestamp: Date;
   }>;
+  marketVolumes?: Map<string, MarketVolumeContext>;
 }
 
 export type RuleParamValue = number | string | boolean;

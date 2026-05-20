@@ -19,6 +19,7 @@ import type { MarketHolderSnapshot, Prisma, WalletTrade } from '@prisma/client';
 import { prisma } from '../../../lib/db';
 import { rulesByKey } from './rules/registry';
 import type {
+  MarketVolumeContext,
   Rule,
   RuleContext,
   RuleEvaluation,
@@ -27,9 +28,15 @@ import type {
 } from './rules/types';
 
 const COORDINATED_ENTRY_KEY = 'coordinated_entry';
+const OUTSIZED_VOLUME_KEY = 'outsized_volume_contributor';
 const TX_TIMEOUT_MS = 5000;
 const TRADES_LOOKBACK_DAYS = 30;
 const COORDINATION_LOOKBACK_HOURS = 24;
+// outsized_volume_contributor's default window is 168h (1 week). The detector
+// always pulls the largest declared window so the same dataset feeds the
+// per-rule windowing logic inside evaluate(). Keep this >= the rule's
+// default; admins can shorten the rule's window without code changes.
+const MARKET_VOLUME_LOOKBACK_HOURS = 168;
 
 interface EnabledRuleConfig {
   rule: Rule;
@@ -123,6 +130,74 @@ async function loadCoordinationGroup(opts: {
       valueUsd: r.valueUsd,
       tradeTimestamp: r.tradeTimestamp,
     });
+  }
+  return out;
+}
+
+/**
+ * Build cross-wallet market-volume aggregates over the lookback window.
+ * One pass over WalletTrade computes per-(market, wallet) totals; then per
+ * market we extract the share-of-market distribution to derive median + top1.
+ *
+ * Caveat: `medianWalletShare` is the median across wallets that traded the
+ * market at all — not across the universe of all tracked wallets. This is
+ * the right denominator for the outsized-contributor signal (we're asking
+ * "compared to others in this market, how does this wallet look?"), but
+ * worth noting if the calibration discussion ever revisits it.
+ */
+async function loadMarketVolumes(
+  marketConditionIds?: string[],
+): Promise<Map<string, MarketVolumeContext>> {
+  const out = new Map<string, MarketVolumeContext>();
+  if (!prisma) return out;
+  const cutoff = new Date(Date.now() - MARKET_VOLUME_LOOKBACK_HOURS * 3_600_000);
+  const where: Prisma.WalletTradeWhereInput = { tradeTimestamp: { gte: cutoff } };
+  if (marketConditionIds && marketConditionIds.length > 0) {
+    where.marketConditionId = { in: marketConditionIds };
+  }
+  const rows = await prisma.walletTrade.findMany({
+    where,
+    select: {
+      walletId: true,
+      marketConditionId: true,
+      valueUsd: true,
+    },
+  });
+
+  // marketConditionId → walletId → cumulative |USD| volume
+  const perMarket = new Map<string, Map<string, number>>();
+  for (const r of rows) {
+    const usd = Math.abs(r.valueUsd);
+    let walletMap = perMarket.get(r.marketConditionId);
+    if (!walletMap) {
+      walletMap = new Map<string, number>();
+      perMarket.set(r.marketConditionId, walletMap);
+    }
+    walletMap.set(r.walletId, (walletMap.get(r.walletId) ?? 0) + usd);
+  }
+
+  for (const [conditionId, walletMap] of perMarket) {
+    let totalUsd = 0;
+    for (const v of walletMap.values()) totalUsd += v;
+    if (totalUsd <= 0) continue;
+
+    const shares: number[] = [];
+    let top1 = 0;
+    for (const v of walletMap.values()) {
+      const share = v / totalUsd;
+      shares.push(share);
+      if (share > top1) top1 = share;
+    }
+    shares.sort((a, b) => a - b);
+    const mid = Math.floor(shares.length / 2);
+    const medianWalletShare =
+      shares.length === 0
+        ? 0
+        : shares.length % 2 === 0
+          ? (shares[mid - 1] + shares[mid]) / 2
+          : shares[mid];
+
+    out.set(conditionId, { totalUsd, medianWalletShare, top1Share: top1 });
   }
   return out;
 }
@@ -236,7 +311,7 @@ export async function runDetection(
     return { walletsEvaluated: 0, flagsRaised: 0, durationMs: Date.now() - startedAt };
   }
 
-  const [coordinationGroup, marketHolders] = await Promise.all([
+  const [coordinationGroup, marketHolders, marketVolumes] = await Promise.all([
     // Always load the FULL last-24h coordination group: coordinated_entry must
     // see OTHER wallets' trades to detect coordination. Even when admin re-scans
     // a subset (opts.walletIds), restricting the group would hide coordinators.
@@ -245,6 +320,12 @@ export async function runDetection(
       ? loadCoordinationGroup({})
       : Promise.resolve<CoordinationEntry[]>([]),
     loadLatestHolderSnapshots(opts.marketConditionIds),
+    // Same logic as the coordination group: outsized_volume_contributor needs
+    // the FULL cross-wallet picture. Restricting to opts.walletIds would
+    // bias the median+top1 distribution and produce false positives.
+    enabledRules.has(OUTSIZED_VOLUME_KEY)
+      ? loadMarketVolumes(opts.marketConditionIds)
+      : Promise.resolve(new Map<string, MarketVolumeContext>()),
   ]);
 
   // Build an inverted index over the coord group once, keyed by
@@ -323,10 +404,12 @@ export async function runDetection(
 
     const toPersist: Prisma.RedFlagCreateManyInput[] = [];
     for (const [ruleKey, cfg] of enabledRules) {
-      const ctx: RuleContext =
-        ruleKey === COORDINATED_ENTRY_KEY
-          ? { ...baseCtx, coordinationGroup: walletSlice }
-          : baseCtx;
+      let ctx: RuleContext = baseCtx;
+      if (ruleKey === COORDINATED_ENTRY_KEY) {
+        ctx = { ...baseCtx, coordinationGroup: walletSlice };
+      } else if (ruleKey === OUTSIZED_VOLUME_KEY) {
+        ctx = { ...baseCtx, marketVolumes };
+      }
       let evaluations: RuleEvaluation[] = [];
       try {
         evaluations = cfg.rule.evaluate(ctx, cfg.params);
@@ -414,11 +497,14 @@ export async function detectFlagsForWallet(
       ...trades.map((t) => t.marketConditionId),
     ]),
   );
-  const [marketHolders, coordinationGroup] = await Promise.all([
+  const [marketHolders, coordinationGroup, marketVolumes] = await Promise.all([
     loadLatestHolderSnapshots(marketIds),
     enabledRules.has(COORDINATED_ENTRY_KEY)
       ? loadCoordinationGroup({})
       : Promise.resolve<CoordinationEntry[]>([]),
+    enabledRules.has(OUTSIZED_VOLUME_KEY)
+      ? loadMarketVolumes(marketIds)
+      : Promise.resolve(new Map<string, MarketVolumeContext>()),
   ]);
   const walletSlice = enabledRules.has(COORDINATED_ENTRY_KEY)
     ? sliceCoordinationGroup(coordinationGroup, wallet.id)
@@ -434,10 +520,12 @@ export async function detectFlagsForWallet(
   const out: RuleEvaluation[] = [];
   const toPersist: Prisma.RedFlagCreateManyInput[] = [];
   for (const [ruleKey, cfg] of enabledRules) {
-    const ctx: RuleContext =
-      ruleKey === COORDINATED_ENTRY_KEY
-        ? { ...baseCtx, coordinationGroup: walletSlice }
-        : baseCtx;
+    let ctx: RuleContext = baseCtx;
+    if (ruleKey === COORDINATED_ENTRY_KEY) {
+      ctx = { ...baseCtx, coordinationGroup: walletSlice };
+    } else if (ruleKey === OUTSIZED_VOLUME_KEY) {
+      ctx = { ...baseCtx, marketVolumes };
+    }
     let evaluations: RuleEvaluation[] = [];
     try {
       evaluations = cfg.rule.evaluate(ctx, cfg.params);
