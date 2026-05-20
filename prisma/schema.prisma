@@ -609,3 +609,18 @@ model WalletScore {
   @@map("wallet_scores")
   @@schema("wallet")
 }
+
+model MarketMetadata {
+  conditionId   String   @id @map("condition_id")
+  marketSlug    String   @map("market_slug")
+  question      String?
+  outcomesJson  Json     @map("outcomes_json")
+  lastFetchedAt DateTime @default(now()) @map("last_fetched_at") @db.Timestamptz(6)
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([marketSlug])
+  @@index([lastFetchedAt])
+  @@map("market_metadata")
+  @@schema("wallet")
+}

@@ -14,6 +14,7 @@
 import { Redis } from '@upstash/redis'
 import { fetchEventBySlug } from '../polymarket/client'
 import { isValidConditionId } from './client'
+import { prisma } from '../../../lib/db'
 
 const CACHE_PREFIX = 'wallet-intel:slug-cid:'
 const CACHE_TTL_SECONDS = 7 * 24 * 60 * 60 // 7 days
@@ -63,12 +64,50 @@ export async function resolveConditionId(slug: string): Promise<string | null> {
     return null
   }
 
-  const firstConditionId = event.markets[0]?.conditionId
+  const firstMarket = event.markets[0]
+  const firstConditionId = firstMarket?.conditionId
   if (!firstConditionId || !isValidConditionId(firstConditionId)) {
     console.warn(
       `[conditionid-resolver] Invalid/missing conditionId for slug "${slug}": "${firstConditionId}"`,
     )
     return null
+  }
+
+  // Best-effort persistence of market metadata (outcome names, question) so
+  // downstream UIs can surface "Lula" instead of "outcome 0". ParsedMarket
+  // already exposes outcomes as a string[] (parsed from Gamma's JSON string)
+  // — the array index IS the outcome index, which is the contract used by
+  // /holders, /positions and /trades responses. Failure here MUST NOT break
+  // slug resolution: the next resolver call will retry, and consumers fall
+  // back to "outcome N" when metadata is missing.
+  if (prisma) {
+    const outcomes = (firstMarket?.outcomes ?? []).map((name, index) => ({
+      index,
+      name,
+    }))
+    const question = firstMarket?.question || event.title || null
+    try {
+      await prisma.marketMetadata.upsert({
+        where: { conditionId: firstConditionId },
+        create: {
+          conditionId: firstConditionId,
+          marketSlug: slug,
+          question,
+          outcomesJson: outcomes,
+        },
+        update: {
+          marketSlug: slug,
+          question,
+          outcomesJson: outcomes,
+          lastFetchedAt: new Date(),
+        },
+      })
+    } catch (err) {
+      console.warn(
+        `[conditionid-resolver] failed to persist MarketMetadata for ${slug}:`,
+        err instanceof Error ? err.message : err,
+      )
+    }
   }
 
   // Best-effort cache write — failure does not break resolution.
